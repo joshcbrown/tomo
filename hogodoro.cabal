@@ -17,12 +17,28 @@ common warnings
 
 library
     import:           warnings
-    exposed-modules:  Timer
+    exposed-modules:  Timer,
+                      Ui,
+                      Pomodoro,
+                      Util,
+                      Tasks
     -- other-modules:
     -- other-extensions:
+    default-extensions: TemplateHaskell
     build-depends:    base ^>=4.20.0.0,
+                      vty,
+                      vty-crossplatform,
+                      time,
+                      mtl,
+                      microlens,
+                      microlens-mtl,
+                      microlens-th,
+                      text,
+                      process,
+                      containers,
                       brick
     hs-source-dirs:   src
+    ghc-options: -threaded
     default-language: GHC2024
 
 executable hogodoro
@@ -35,4 +51,5 @@ executable hogodoro
         hogodoro,
 
     hs-source-dirs:   app
+    ghc-options: -threaded -rtsopts
     default-language: GHC2024
