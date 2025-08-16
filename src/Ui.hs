@@ -23,6 +23,7 @@ import Lens.Micro ((%~), (&), (.~), (^.))
 import Lens.Micro.Mtl (use, (%=), (.=))
 import Lens.Micro.TH (makeLenses)
 import Pomodoro
+import Stats
 import Tasks
 import Util
 
@@ -47,6 +48,7 @@ data AppState = AppState
   , _showingTasks :: Bool
   , _focus :: AppFocus
   , _taskForm :: Form Task PomoEvent PomoResource
+  , _stats :: StatsState
   }
 
 makeLenses ''AppState
@@ -65,47 +67,46 @@ eventHandler ev = case ev of
         zoom sesh $ handle t
         use (ts . tasks) >>= saveTs . toList
       CompleteTask t -> zoom ts $ handleTaskEvent (Append t)
+      RefreshStats -> zoom stats $ refreshState
   (VtyEvent (EvKey k [])) -> do
     use focus >>= \case
       TaskForm -> case k of
         KEsc -> focus .= Unfocused
         KEnter -> do
-          t <- liftIO getCurrentTime
+          t <- liftIO getZonedTime
           pom <- (timeCreated .~ t) . formState <$> use taskForm
           zoom ts $ handleTaskEvent (Add pom)
           liftIO defaultTaskForm >>= (taskForm .=)
         _ -> zoom taskForm $ handleFormEvent ev
-      Tasks -> case k of
-        (KChar 'j') -> do
-          zoom ts $ handleTaskEvent SelDown
-        (KChar 'k') -> do
-          zoom ts $ handleTaskEvent SelUp
-        (KChar 't') -> unfocus *> (showingTasks %= not)
-        (KChar 'd') -> zoom ts $ handleTaskEvent Delete
-        (KChar 'q') -> halt
-        KEsc -> unfocus
-        KEnter -> do
-          old <- use (sesh . task)
-          zoom ts $ handleTaskEvent (SelectWithOld old)
-          unfocus
-        _ -> pure ()
-      Unfocused -> case k of
+      f -> case k of
         (KChar 'p') -> use chan >>= zoom sesh . toggleTimer
         (KChar 'q') -> halt
         (KChar 'n') -> use chan >>= zoom sesh . skip
-        (KChar 'j') -> do
-          focus .= Tasks
-          zoom ts $ handleTaskEvent SelDown
-        (KChar 'k') -> do
-          focus .= Tasks
-          zoom ts $ handleTaskEvent SelUp
         (KChar 't') -> showingTasks %= not
         (KChar 'i') -> do
           unfocus
           focus .= TaskForm
           showingTasks .= True
-        (KChar 'c') -> zoom sesh $ handle Complete
-        _ -> pure ()
+        _ -> case f of
+          Tasks -> case k of
+            (KChar 'd') -> zoom ts $ handleTaskEvent Delete
+            (KChar 'j') -> zoom ts $ handleTaskEvent SelDown
+            (KChar 'k') -> zoom ts $ handleTaskEvent SelUp
+            KEsc -> unfocus
+            KEnter -> do
+              old <- use (sesh . task)
+              zoom ts $ handleTaskEvent (SelectWithOld old)
+              unfocus
+            _ -> pure ()
+          Unfocused -> case k of
+            (KChar 'j') -> do
+              focus .= Tasks
+              zoom ts $ handleTaskEvent SelDown
+            (KChar 'k') -> do
+              focus .= Tasks
+              zoom ts $ handleTaskEvent SelUp
+            (KChar 'c') -> zoom sesh $ handle Complete
+            _ -> pure ()
   _ -> pure ()
  where
   saveTs taskList = use (sesh . task) >>= liftIO . saveTasks . maybe taskList ((: taskList))
@@ -121,8 +122,9 @@ draw s =
       if (s ^. showingTasks)
         then second <=> tasksW (s ^. ts)
         else second
+    fourth = third <=> statsW (s ^. stats)
    in
-    [center $ hLimit 30 third]
+    [center $ hLimit 30 fourth]
 
 app :: App AppState PomoEvent PomoResource
 app =
@@ -130,10 +132,12 @@ app =
     { appDraw = draw
     , appHandleEvent = eventHandler
     , appStartEvent = do
+        -- TODO: move all this shit to initApp
         c <- use chan
         ts . sendTask .= \t -> writeBChan c (TimerEvent (SelectTask t))
         ts . saveTasks' .= \xs -> writeBChan c (SaveTasks xs)
         sesh . complete .= \t -> writeBChan c (CompleteTask t)
+        sesh . Pomodoro.logActivity .= \a -> liftIO (Util.logActivity a) *> writeBChan c RefreshStats
         liftIO loadTasks >>= zoom ts . handleTaskEvent . Load
     , appAttrMap = const attrs
     , appChooseCursor = neverShowCursor
@@ -148,6 +152,7 @@ initApp =
     <*> pure True
     <*> pure Unfocused
     <*> defaultTaskForm
+    <*> getStats
 
 appMain :: IO ()
 appMain = do

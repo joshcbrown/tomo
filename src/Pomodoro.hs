@@ -2,7 +2,7 @@
 
 module Pomodoro where
 
-import Brick (EventM, txt)
+import Brick (EventM, invalidateCacheEntry, txt)
 import Brick.BChan (BChan, writeBChan)
 import Brick.Types (
   Widget,
@@ -10,17 +10,18 @@ import Brick.Types (
 import Brick.Widgets.Core (vBox)
 import Brick.Widgets.ProgressBar (progressBar)
 import Control.Concurrent (ThreadId, forkIO, killThread)
+import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time
 import Graphics.Vty (blue, green, red)
 import Graphics.Vty qualified as Vty
-import Lens.Micro ((&), (+~), (.~), (^.))
-import Lens.Micro.Mtl (use, (%=), (+=), (.=))
+import Lens.Micro ((&), (+~), (.~), (^.), (^?), _Just)
+import Lens.Micro.Mtl (preuse, use, (%=), (+=), (.=))
 import Lens.Micro.TH (makeLenses)
 import System.Process
-import Util
+import Util hiding (logActivity)
 
 data Work = Work | ShortBreak | LongBreak
 
@@ -29,11 +30,13 @@ data TimerData = YetToStart | Paused | Playing ThreadId
 data PomoSession = PomoSession
   { _task :: Maybe Task
   , _ty :: Work
-  , _pLength :: NominalDiffTime
+  , _pFullLength :: NominalDiffTime
+  , _pPauseLength :: NominalDiffTime
   , _pCycle :: Int
   , _remaining :: NominalDiffTime
   , _timerThread :: TimerData
   , _complete :: Task -> IO ()
+  , _logActivity :: Activity -> IO ()
   }
 
 makeLenses ''PomoSession
@@ -44,11 +47,13 @@ ex =
     { _task =
         Nothing
     , _ty = Work
-    , _pLength = workLength
+    , _pFullLength = workLength
+    , _pPauseLength = workLength
     , _pCycle = 1
     , _remaining = workLength
     , _timerThread = YetToStart
     , _complete = \_ -> pure ()
+    , _logActivity = \_ -> pure ()
     }
 
 isPlaying :: TimerData -> Bool
@@ -62,14 +67,34 @@ workLength = secondsToNominalDiffTime $ 25 * 60
 shortBreakLength = secondsToNominalDiffTime $ 5 * 60
 longBreakLength = secondsToNominalDiffTime $ 15 * 60
 
-toggleTimer :: BChan PomoEvent -> EventM n PomoSession ()
+getTitle :: EventM n PomoSession (Maybe Text)
+getTitle = preuse (task . _Just . title)
+
+logActivity' :: Activity -> EventM PomoResource PomoSession ()
+logActivity' a = use logActivity >>= \f -> liftIO (f a)
+
+logWorked :: NominalDiffTime -> EventM PomoResource PomoSession ()
+logWorked t =
+  use ty >>= \case
+    Work -> getTitle >>= logActivity' . flip LWorked t
+    _ -> pure ()
+
+logCompleted :: EventM PomoResource PomoSession ()
+logCompleted = getTitle >>= maybe (pure ()) (logActivity' . LCompleted)
+
+toggleTimer :: BChan PomoEvent -> EventM PomoResource PomoSession ()
 toggleTimer chan =
   use timerThread
     >>= \case
-      Playing tid -> liftIO (killThread tid) *> (timerThread .= Paused)
-      _ -> (startTimer chan)
+      Playing tid -> do
+        t <- (-) <$> use pPauseLength <*> use remaining
+        logWorked t
+        liftIO (killThread tid) *> (timerThread .= Paused)
+      _ -> do
+        (pPauseLength .=) =<< use remaining
+        startTimer chan
 
-startTimer :: BChan PomoEvent -> EventM n PomoSession ()
+startTimer :: BChan PomoEvent -> EventM PomoResource PomoSession ()
 startTimer chan =
   use remaining >>= start
  where
@@ -77,17 +102,29 @@ startTimer chan =
   start l =
     liftIO (forkIO (time tick l (writeBChan chan . TimerEvent))) >>= (timerThread .=) . Playing
 
-skip :: BChan PomoEvent -> EventM n PomoSession ()
+skip :: BChan PomoEvent -> EventM PomoResource PomoSession ()
 skip chan =
   use timerThread >>= \case
     Playing tid -> liftIO (killThread tid *> writeBChan chan (TimerEvent Done))
     _ -> liftIO (writeBChan chan (TimerEvent Done))
 
-handle :: TimerEvent -> EventM n PomoSession ()
+handle :: TimerEvent -> EventM PomoResource PomoSession ()
 handle = \case
   TimeLeft d -> remaining .= d
   SelectTask p -> task .= Just p
-  Done -> do
+  Done -> nextCycle True
+  Skip -> nextCycle False
+  Complete -> do
+    now <- liftIO getZonedTime
+    logCompleted
+    use task >>= \case
+      Just t -> use complete >>= \f -> liftIO (f $ t & timeFinished .~ Just now)
+      Nothing -> pure ()
+    task .= Nothing
+ where
+  nextCycle :: Bool -> EventM PomoResource PomoSession ()
+  nextCycle logRemaining = do
+    when logRemaining $ use pPauseLength >>= logWorked
     timerThread .= YetToStart
     let workTrans = (pCycle += 1) *> pure (Work, workLength)
     (newTy, newLength) <-
@@ -103,15 +140,10 @@ handle = \case
               else (ShortBreak, shortBreakLength)
     ty .= newTy
     remaining .= newLength
-    pLength .= newLength
+    pFullLength .= newLength
+    pPauseLength .= newLength
     notifyMac
-  Complete -> do
-    now <- liftIO getCurrentTime
-    use task >>= \case
-      Just t -> use complete >>= \f -> liftIO (f $ t & timeFinished .~ Just now)
-      Nothing -> pure ()
-    task .= Nothing
- where
+
   notifyMac :: EventM n PomoSession ()
   notifyMac = do
     (message, soundName) <-
@@ -160,5 +192,5 @@ pomoW p =
     , progressBar Nothing (1 - (realToFrac $ secondsLeft / lengthSeconds))
     ]
   secondsLeft = nominalDiffTimeToSeconds (p ^. remaining)
-  lengthSeconds = nominalDiffTimeToSeconds (p ^. pLength)
+  lengthSeconds = nominalDiffTimeToSeconds (p ^. pFullLength)
   (minutes :: Int, seconds) = floor secondsLeft `divMod` 60

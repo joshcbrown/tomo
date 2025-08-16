@@ -10,8 +10,9 @@ import Data.Foldable (toList)
 import Data.Maybe (isJust)
 import Data.Sequence (Seq (..), (<|), (|>))
 import Data.Sequence qualified as Seq
-import Data.Time (getCurrentTime, utctDay)
-import Graphics.Vty (Color)
+import Data.Time (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTime, utctDay)
+import Data.Time.LocalTime (getZonedTime)
+import Graphics.Vty (Color, white)
 import Graphics.Vty.Attributes (brightWhite, yellow)
 import Lens.Micro ((^.))
 import Lens.Micro.Mtl (use, view, (%=), (.=))
@@ -78,8 +79,8 @@ handleTaskEvent = \case
       Nothing -> pure ()
   Save -> save
   Load ts -> do
-    today <- utctDay <$> liftIO getCurrentTime
-    let filtered = filter ((== today) . utctDay . view timeCreated) ts
+    today <- zonedTimeToLocalDay <$> liftIO getZonedTime
+    let filtered = filter ((== today) . zonedTimeToLocalDay . view timeCreated) ts
     tasks .= Seq.fromList filtered
  where
   addSel :: Int -> EventM n TaskState ()
@@ -92,7 +93,7 @@ handleTaskEvent = \case
         Just n -> Just ((n + i) `mod` l)
 
 col :: Bool -> Color
-col focused = if focused then yellow else brightWhite
+col focused = if focused then yellow else white
 
 tasksW :: TaskState -> Widget n
 tasksW ts =
@@ -121,5 +122,5 @@ mkTaskForm =
 
 defaultTaskForm :: IO (Form Task PomoEvent PomoResource)
 defaultTaskForm = do
-  t <- getCurrentTime
+  t <- getZonedTime
   pure $ mkTaskForm (Task "" 0 0 t Nothing)

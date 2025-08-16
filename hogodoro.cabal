@@ -21,6 +21,7 @@ library
                       Ui,
                       Pomodoro,
                       Util,
+                      Stats,
                       Tasks
     -- other-modules:
     -- other-extensions:

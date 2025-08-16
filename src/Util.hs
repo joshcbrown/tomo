@@ -14,16 +14,19 @@ import Graphics.Vty (Color)
 import Lens.Micro.TH (makeLenses)
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (try)
+import Control.Exception (SomeException (SomeException), try)
 import Control.Monad (when)
 import Data.Aeson (FromJSON, ToJSON, decode, encode)
 import Data.ByteString.Lazy qualified as LBS
+import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Either (fromRight)
 import Data.Functor ((<&>))
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text qualified as Text
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (Day, LocalTime (localDay), NominalDiffTime, UTCTime (utctDay), ZonedTime (zonedTimeToLocalTime), addUTCTime, diffUTCTime, getCurrentTime, getZonedTime, zonedTimeToUTC)
+import Data.Time.Clock (nominalDiffTimeToSeconds)
 import GHC.Generics (Generic)
+import GHC.IO.Exception (IOException (..))
 import Lens.Micro ((^.))
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.FilePath ((</>))
@@ -32,12 +35,41 @@ data Task = Task
   { _title :: Text
   , _nCompleted :: Int
   , _target :: Int
-  , _timeCreated :: UTCTime
-  , _timeFinished :: Maybe UTCTime
+  , _timeCreated :: ZonedTime
+  , _timeFinished :: Maybe ZonedTime
   }
-  deriving (Show, Eq, Generic)
+  deriving (Show, Generic)
 
 makeLenses ''Task
+
+data TimerEvent = TimeLeft NominalDiffTime | Done | SelectTask Task | Complete | Skip
+
+data PomoEvent
+  = TimerEvent TimerEvent
+  | SaveTasks [Task]
+  | CompleteTask Task
+  | RefreshStats
+
+data PomoResource = TaskTitleField | TaskTargetField | StatsWidget
+  deriving (Eq, Ord, Show)
+
+data AppFocus = Tasks | TaskForm | Unfocused
+
+data Activity = LWorked (Maybe Text) NominalDiffTime | LCompleted Text
+  deriving (Show, Eq, Generic)
+
+data AppLog = AppLog ZonedTime Activity
+  deriving (Show, Generic)
+
+activity :: AppLog -> Activity
+activity (AppLog _ ac) = ac
+
+instance ToJSON Activity
+instance ToJSON AppLog
+instance ToJSON Task
+instance FromJSON Activity
+instance FromJSON AppLog
+instance FromJSON Task
 
 tShow :: (Show a) => a -> Text
 tShow = Text.pack . show
@@ -46,21 +78,6 @@ taskPretty :: Task -> Text
 taskPretty p = prefix <> p ^. title <> " (" <> tShow (p ^. nCompleted) <> "/" <> tShow (p ^. target) <> ")"
  where
   prefix = if isJust (p ^. timeFinished) then "× " else "· "
-
-instance ToJSON Task
-instance FromJSON Task
-
-data TimerEvent = TimeLeft NominalDiffTime | Done | SelectTask Task | Complete
-
-data PomoEvent
-  = TimerEvent TimerEvent
-  | SaveTasks [Task]
-  | CompleteTask Task
-
-data PomoResource = TaskTitleField | TaskTargetField
-  deriving (Eq, Ord, Show)
-
-data AppFocus = Tasks | TaskForm | Unfocused
 
 time :: NominalDiffTime -> NominalDiffTime -> (TimerEvent -> IO ()) -> IO ()
 time tickDuration duration notify = getCurrentTime >>= go
@@ -100,28 +117,58 @@ bord col title w =
 appName :: String
 appName = "pomos"
 
-appDir :: IO FilePath
-appDir = do
+ensureDir :: FilePath -> IO FilePath
+ensureDir dir = createDirectoryIfMissing True dir *> pure dir
+
+appDirPath :: IO FilePath
+appDirPath = do
   home <- getHomeDirectory
-  let dir = home </> "Library" </> "Application Support" </> appName
-  createDirectoryIfMissing True dir
-  pure dir
+  pure $ home </> "Library" </> "Application Support" </> appName
+
+appDir :: IO FilePath
+appDir = appDirPath >>= ensureDir
+
+logsDir :: IO FilePath
+logsDir = (appDirPath <&> (</> "logs")) >>= ensureDir
+
+logFile :: Day -> IO FilePath
+logFile t = (</>) <$> logsDir <*> pure (show t <> ".jsonl")
+
+currentLogFile :: IO FilePath
+currentLogFile = logFile =<< (zonedTimeToLocalDay <$> getZonedTime)
 
 tasksFilePath :: IO FilePath
 tasksFilePath = appDir <&> (</> "tasks.json")
 
+-- TODO: exception handling (?)
 saveTasks :: [Task] -> IO (())
-saveTasks tasks = do
-  try (tasksFilePath >>= \f -> LBS.writeFile f (encode tasks))
-    >>= \case
-      -- TODO: logging
-      Left (_ :: IOError) -> pure ()
-      Right _ -> pure ()
+saveTasks tasks = tasksFilePath >>= \f -> LBS.writeFile f (encode tasks)
+
+nullIfThrow :: IO [a] -> IO [a]
+nullIfThrow act = fromRight [] <$> try @IOException act
 
 loadTasks :: IO [Task]
-loadTasks = do
-  result :: Either IOError (Maybe [Task]) <- try $ do
-    filePath <- tasksFilePath
-    content <- LBS.readFile filePath
-    pure (decode content)
-  pure $ fromMaybe [] $ fromRight Nothing result
+loadTasks = nullIfThrow $ do
+  filePath <- tasksFilePath
+  content <- LBS.readFile filePath
+  pure $ fromMaybe [] (decode content)
+
+logActivity :: Activity -> IO ()
+logActivity a = do
+  t <- getZonedTime
+  f <- currentLogFile
+  let line = encode (AppLog t a) <> "\n"
+  LBS.appendFile f line
+
+dayLogs :: Day -> IO [AppLog]
+dayLogs t = nullIfThrow $ do
+  contents <- LBS.readFile =<< logFile t
+  let contentL = filter (not . LBS8.null) (LBS8.lines contents)
+  pure $ mapMaybe decode contentL
+
+todayLogs :: IO [AppLog]
+todayLogs = dayLogs =<< (zonedTimeToLocalDay <$> getZonedTime)
+
+-- misc
+zonedTimeToLocalDay :: ZonedTime -> Day
+zonedTimeToLocalDay = localDay . zonedTimeToLocalTime
