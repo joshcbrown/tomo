@@ -36,6 +36,10 @@ library
                       text,
                       process,
                       containers,
+                      filepath,
+                      aeson,
+                      bytestring,
+                      directory,
                       brick
     hs-source-dirs:   src
     ghc-options: -threaded

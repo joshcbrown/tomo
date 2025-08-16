@@ -3,36 +3,23 @@
 module Ui where
 
 import Data.Time
-import Graphics.Vty (
-  black,
-  brightRed,
-  brightWhite,
-  cyan,
-  defaultConfig,
-  green,
-  red,
-  white,
-  withURL,
-  yellow,
- )
 
-import Brick (BrickEvent (..), EventM, Padding (..), Widget, modify, zoom)
+import Brick (BrickEvent (..), EventM, Widget, zoom)
 import Brick.AttrMap (AttrMap, attrMap, attrName)
 import Brick.BChan (BChan, newBChan, writeBChan)
 import Brick.Forms (Form (formState), focusedFormInputAttr, handleFormEvent, invalidFormInputAttr, renderForm)
 import Brick.Main
 import Brick.Util (bg, fg, on)
-import Brick.Widgets.Border (border, borderAttr)
+import Brick.Widgets.Border (borderAttr)
 import Brick.Widgets.Center (center)
-import Brick.Widgets.Core (hLimit, padTop, (<=>))
-import Brick.Widgets.Edit (editAttr, editFocusedAttr)
+import Brick.Widgets.Core (hLimit, (<=>))
+import Brick.Widgets.Edit (editFocusedAttr)
 import Brick.Widgets.ProgressBar (progressCompleteAttr)
-import Control.Concurrent (forkIO)
 import Control.Monad.IO.Class (liftIO)
-import Data.Sequence (Seq (..))
+import Data.Foldable (toList)
 import Graphics.Vty as Vty
 import Graphics.Vty.CrossPlatform (mkVty)
-import Lens.Micro ((.~), (^.))
+import Lens.Micro ((%~), (&), (.~), (^.))
 import Lens.Micro.Mtl (use, (%=), (.=))
 import Lens.Micro.TH (makeLenses)
 import Pomodoro
@@ -71,7 +58,13 @@ unfocus = do
 
 eventHandler :: BrickEvent PomoResource PomoEvent -> EventM PomoResource AppState ()
 eventHandler ev = case ev of
-  (AppEvent t) -> zoom sesh $ handle t
+  (AppEvent t) -> do
+    case t of
+      SaveTasks taskList -> saveTs taskList
+      TimerEvent t -> do
+        zoom sesh $ handle t
+        use (ts . tasks) >>= saveTs . toList
+      CompleteTask t -> zoom ts $ handleTaskEvent (Append t)
   (VtyEvent (EvKey k [])) -> do
     use focus >>= \case
       TaskForm -> case k of
@@ -88,6 +81,8 @@ eventHandler ev = case ev of
         (KChar 'k') -> do
           zoom ts $ handleTaskEvent SelUp
         (KChar 't') -> unfocus *> (showingTasks %= not)
+        (KChar 'd') -> zoom ts $ handleTaskEvent Delete
+        (KChar 'q') -> halt
         KEsc -> unfocus
         KEnter -> do
           old <- use (sesh . task)
@@ -109,9 +104,11 @@ eventHandler ev = case ev of
           unfocus
           focus .= TaskForm
           showingTasks .= True
-        (KChar 'c') -> sesh . task .= Nothing
+        (KChar 'c') -> zoom sesh $ handle Complete
         _ -> pure ()
   _ -> pure ()
+ where
+  saveTs taskList = use (sesh . task) >>= liftIO . saveTasks . maybe taskList ((: taskList))
 
 draw :: AppState -> [Widget PomoResource]
 draw s =
@@ -134,10 +131,10 @@ app =
     , appHandleEvent = eventHandler
     , appStartEvent = do
         c <- use chan
-        zoom sesh $ startTimer c
-        ts . sendTask .= \t -> writeBChan c (SelectTask t)
-        focus .= Unfocused
-        zoom ts $ handleTaskEvent Deselect
+        ts . sendTask .= \t -> writeBChan c (TimerEvent (SelectTask t))
+        ts . saveTasks' .= \xs -> writeBChan c (SaveTasks xs)
+        sesh . complete .= \t -> writeBChan c (CompleteTask t)
+        liftIO loadTasks >>= zoom ts . handleTaskEvent . Load
     , appAttrMap = const attrs
     , appChooseCursor = neverShowCursor
     }
@@ -148,7 +145,7 @@ initApp =
     <$> newBChan 10
     <*> pure ex
     <*> pure exTasks
-    <*> pure False
+    <*> pure True
     <*> pure Unfocused
     <*> defaultTaskForm
 

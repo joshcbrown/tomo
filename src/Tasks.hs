@@ -3,29 +3,38 @@
 module Tasks where
 
 import Brick
-import Brick.BChan
 import Brick.Forms
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
-import Data.Maybe (fromMaybe, isJust)
-import Data.Sequence (Seq (..), (<|))
+import Data.Maybe (isJust)
+import Data.Sequence (Seq (..), (<|), (|>))
 import Data.Sequence qualified as Seq
-import Data.Time (getCurrentTime)
+import Data.Time (getCurrentTime, utctDay)
 import Graphics.Vty (Color)
 import Graphics.Vty.Attributes (brightWhite, yellow)
 import Lens.Micro ((^.))
-import Lens.Micro.Mtl (use, (%=), (.=))
+import Lens.Micro.Mtl (use, view, (%=), (.=))
 import Lens.Micro.TH (makeLenses)
 import Pomodoro
-import Util
+import Util hiding (saveTasks)
 
-data Control = SelUp | SelDown | Deselect | SelectWithOld (Maybe Task) | Add Task
+data Control
+  = SelUp
+  | SelDown
+  | Deselect
+  | Delete
+  | SelectWithOld (Maybe Task)
+  | Add Task
+  | Append Task
+  | Save
+  | Load [Task]
 
 data TaskState = TaskState
   { _tasks :: Seq Task
   , _selected :: Maybe Int
   , _sendTask :: Task -> IO ()
+  , _saveTasks' :: [Task] -> IO ()
   }
 
 exTasks :: TaskState
@@ -34,16 +43,29 @@ exTasks =
     { _tasks = Seq.fromList []
     , _selected = Nothing
     , _sendTask = \_ -> pure ()
+    , _saveTasks' = \_ -> pure ()
     }
 
 makeLenses ''TaskState
+
+save :: EventM n TaskState ()
+save = do
+  ts <- use tasks
+  f <- use saveTasks'
+  liftIO $ f (toList ts)
 
 handleTaskEvent :: Control -> EventM n TaskState ()
 handleTaskEvent = \case
   SelUp -> addSel (-1)
   SelDown -> addSel 1
   Deselect -> selected .= Nothing
-  Add p -> tasks %= (p <|)
+  Delete -> use selected >>= maybe (pure ()) ((tasks %=) . Seq.deleteAt)
+  Add p -> do
+    tasks %= (p <|)
+    save
+  Append p -> do
+    tasks %= (|> p)
+    save
   SelectWithOld old -> do
     f <- use sendTask
     idx <- use selected
@@ -54,6 +76,11 @@ handleTaskEvent = \case
         tasks %= Seq.deleteAt i
         maybe (pure ()) (\p -> tasks %= (p <|)) old
       Nothing -> pure ()
+  Save -> save
+  Load ts -> do
+    today <- utctDay <$> liftIO getCurrentTime
+    let filtered = filter ((== today) . utctDay . view timeCreated) ts
+    tasks .= Seq.fromList filtered
  where
   addSel :: Int -> EventM n TaskState ()
   addSel i = do
@@ -74,8 +101,8 @@ tasksW ts =
           \i t ->
             padRight Max $
               if ts ^. selected == Just i
-                then withAttr (attrName "accent") (txt (pomoPretty t))
-                else txt (pomoPretty t)
+                then withAttr (attrName "accent") (txt (taskPretty t))
+                else txt (taskPretty t)
    in if null blah
         then txt "no tasks ([i] to insert task)"
         else
@@ -91,6 +118,7 @@ mkTaskForm =
         [ label "title" @@= editTextField title TaskTitleField (Just 1)
         , label "target" @@= editShowableField target TaskTargetField
         ]
+
 defaultTaskForm :: IO (Form Task PomoEvent PomoResource)
 defaultTaskForm = do
   t <- getCurrentTime

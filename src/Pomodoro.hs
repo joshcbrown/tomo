@@ -2,28 +2,21 @@
 
 module Pomodoro where
 
-import Brick (EventM, Padding (Max), hLimit, txt, updateAttrMap)
-import Brick.AttrMap (applyAttrMappings, attrName)
+import Brick (EventM, txt)
 import Brick.BChan (BChan, writeBChan)
 import Brick.Types (
   Widget,
  )
-import Brick.Util (bg, fg)
-import Brick.Widgets.Border (borderAttr, borderWithLabel)
-import Brick.Widgets.Border.Style (unicodeRounded)
-import Brick.Widgets.Center (center)
-import Brick.Widgets.Core (fill, padRight, vBox, withAttr, withBorderStyle, (<+>))
-import Brick.Widgets.ProgressBar (progressBar, progressCompleteAttr)
+import Brick.Widgets.Core (vBox)
+import Brick.Widgets.ProgressBar (progressBar)
 import Control.Concurrent (ThreadId, forkIO, killThread)
 import Control.Monad.IO.Class (MonadIO (liftIO))
-import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time
-import Data.Time (NominalDiffTime, nominalDiffTimeToSeconds, secondsToNominalDiffTime)
 import Graphics.Vty (blue, green, red)
 import Graphics.Vty qualified as Vty
-import Lens.Micro ((+~), (^.))
+import Lens.Micro ((&), (+~), (.~), (^.))
 import Lens.Micro.Mtl (use, (%=), (+=), (.=))
 import Lens.Micro.TH (makeLenses)
 import System.Process
@@ -40,6 +33,7 @@ data PomoSession = PomoSession
   , _pCycle :: Int
   , _remaining :: NominalDiffTime
   , _timerThread :: TimerData
+  , _complete :: Task -> IO ()
   }
 
 makeLenses ''PomoSession
@@ -54,6 +48,7 @@ ex =
     , _pCycle = 1
     , _remaining = workLength
     , _timerThread = YetToStart
+    , _complete = \_ -> pure ()
     }
 
 isPlaying :: TimerData -> Bool
@@ -80,15 +75,15 @@ startTimer chan =
  where
   tick = secondsToNominalDiffTime 0.1
   start l =
-    liftIO (forkIO (time tick l (writeBChan chan))) >>= (timerThread .=) . Playing
+    liftIO (forkIO (time tick l (writeBChan chan . TimerEvent))) >>= (timerThread .=) . Playing
 
 skip :: BChan PomoEvent -> EventM n PomoSession ()
 skip chan =
   use timerThread >>= \case
-    Playing tid -> liftIO (killThread tid *> writeBChan chan Done)
-    _ -> liftIO (writeBChan chan Done)
+    Playing tid -> liftIO (killThread tid *> writeBChan chan (TimerEvent Done))
+    _ -> liftIO (writeBChan chan (TimerEvent Done))
 
-handle :: PomoEvent -> EventM n PomoSession ()
+handle :: TimerEvent -> EventM n PomoSession ()
 handle = \case
   TimeLeft d -> remaining .= d
   SelectTask p -> task .= Just p
@@ -102,13 +97,20 @@ handle = \case
         Work -> do
           task %= fmap (nCompleted +~ 1)
           c <- use pCycle
-          if c `mod` 4 == 0
-            then pure (LongBreak, longBreakLength)
-            else pure (ShortBreak, shortBreakLength)
+          pure $
+            if c `mod` 4 == 0
+              then (LongBreak, longBreakLength)
+              else (ShortBreak, shortBreakLength)
     ty .= newTy
     remaining .= newLength
     pLength .= newLength
     notifyMac
+  Complete -> do
+    now <- liftIO getCurrentTime
+    use task >>= \case
+      Just t -> use complete >>= \f -> liftIO (f $ t & timeFinished .~ Just now)
+      Nothing -> pure ()
+    task .= Nothing
  where
   notifyMac :: EventM n PomoSession ()
   notifyMac = do
@@ -127,11 +129,6 @@ handle = \case
     pure ()
 
 -- UI
-pomoPretty :: Task -> Text
-pomoPretty p = p ^. title <> " (" <> tShow (p ^. nCompleted) <> "/" <> tShow (p ^. target) <> ")"
-
-tShow :: (Show a) => a -> Text
-tShow = Text.pack . show
 
 workPretty :: Work -> Text
 workPretty = \case
