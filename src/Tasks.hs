@@ -11,7 +11,7 @@ import Data.Foldable (toList)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Sequence (Seq (..), (<|))
 import Data.Sequence qualified as Seq
-import Data.Text (Text)
+import Data.Time (getCurrentTime)
 import Graphics.Vty (Color)
 import Graphics.Vty.Attributes (brightWhite, yellow)
 import Lens.Micro ((^.))
@@ -20,12 +20,12 @@ import Lens.Micro.TH (makeLenses)
 import Pomodoro
 import Util
 
-data Control = SelUp | SelDown | Deselect | SelectWithOld (Maybe Pomo) | Add Pomo
+data Control = SelUp | SelDown | Deselect | SelectWithOld (Maybe Task) | Add Task
 
 data TaskState = TaskState
-  { _tasks :: Seq Pomo
+  { _tasks :: Seq Task
   , _selected :: Maybe Int
-  , _sendTask :: Pomo -> IO ()
+  , _sendTask :: Task -> IO ()
   }
 
 exTasks :: TaskState
@@ -83,7 +83,7 @@ tasksW ts =
             vBox $
               blah
 
-mkTaskForm :: Pomo -> Form Pomo PomoEvent PomoResource
+mkTaskForm :: Task -> Form Task PomoEvent PomoResource
 mkTaskForm =
   let label s w =
         (vLimit 1 $ hLimit 15 $ str s <+> fill ' ') <+> w
@@ -91,5 +91,7 @@ mkTaskForm =
         [ label "title" @@= editTextField title TaskTitleField (Just 1)
         , label "target" @@= editShowableField target TaskTargetField
         ]
-defaultTaskForm :: Form Pomo PomoEvent PomoResource
-defaultTaskForm = mkTaskForm $ Pomo "" 0 0
+defaultTaskForm :: IO (Form Task PomoEvent PomoResource)
+defaultTaskForm = do
+  t <- getCurrentTime
+  pure $ mkTaskForm (Task "" 0 0 t Nothing)

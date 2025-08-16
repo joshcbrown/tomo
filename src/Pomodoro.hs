@@ -34,7 +34,7 @@ data Work = Work | ShortBreak | LongBreak
 data TimerData = YetToStart | Paused | Playing ThreadId
 
 data PomoSession = PomoSession
-  { _pomo :: Maybe Pomo
+  { _task :: Maybe Task
   , _ty :: Work
   , _pLength :: NominalDiffTime
   , _pCycle :: Int
@@ -47,7 +47,7 @@ makeLenses ''PomoSession
 ex :: PomoSession
 ex =
   PomoSession
-    { _pomo =
+    { _task =
         Nothing
     , _ty = Work
     , _pLength = workLength
@@ -91,7 +91,7 @@ skip chan =
 handle :: PomoEvent -> EventM n PomoSession ()
 handle = \case
   TimeLeft d -> remaining .= d
-  SelectTask p -> pomo .= Just p
+  SelectTask p -> task .= Just p
   Done -> do
     timerThread .= YetToStart
     let workTrans = (pCycle += 1) *> pure (Work, workLength)
@@ -100,7 +100,7 @@ handle = \case
         ShortBreak -> workTrans
         LongBreak -> workTrans
         Work -> do
-          pomo %= fmap (nCompleted +~ 1)
+          task %= fmap (nCompleted +~ 1)
           c <- use pCycle
           if c `mod` 4 == 0
             then pure (LongBreak, longBreakLength)
@@ -127,7 +127,7 @@ handle = \case
     pure ()
 
 -- UI
-pomoPretty :: Pomo -> Text
+pomoPretty :: Task -> Text
 pomoPretty p = p ^. title <> " (" <> tShow (p ^. nCompleted) <> "/" <> tShow (p ^. target) <> ")"
 
 tShow :: (Show a) => a -> Text
@@ -149,7 +149,7 @@ pomoW :: PomoSession -> Widget n
 pomoW p =
   bord (workColour $ p ^. ty) (titleText <> titleSuffix) $
     vBox $
-      maybe rest ((: rest) . workingOn) (p ^. pomo)
+      maybe rest ((: rest) . workingOn) (p ^. task)
  where
   titleText = workPretty (p ^. ty)
   titleSuffix = case (p ^. timerThread) of

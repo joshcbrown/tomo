@@ -32,7 +32,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Sequence (Seq (..))
 import Graphics.Vty as Vty
 import Graphics.Vty.CrossPlatform (mkVty)
-import Lens.Micro ((^.))
+import Lens.Micro ((.~), (^.))
 import Lens.Micro.Mtl (use, (%=), (.=))
 import Lens.Micro.TH (makeLenses)
 import Pomodoro
@@ -59,7 +59,7 @@ data AppState = AppState
   , _ts :: TaskState
   , _showingTasks :: Bool
   , _focus :: AppFocus
-  , _taskForm :: Form Pomo PomoEvent PomoResource
+  , _taskForm :: Form Task PomoEvent PomoResource
   }
 
 makeLenses ''AppState
@@ -77,9 +77,10 @@ eventHandler ev = case ev of
       TaskForm -> case k of
         KEsc -> focus .= Unfocused
         KEnter -> do
-          pom <- formState <$> use taskForm
-          taskForm .= defaultTaskForm
+          t <- liftIO getCurrentTime
+          pom <- (timeCreated .~ t) . formState <$> use taskForm
           zoom ts $ handleTaskEvent (Add pom)
+          liftIO defaultTaskForm >>= (taskForm .=)
         _ -> zoom taskForm $ handleFormEvent ev
       Tasks -> case k of
         (KChar 'j') -> do
@@ -89,7 +90,7 @@ eventHandler ev = case ev of
         (KChar 't') -> unfocus *> (showingTasks %= not)
         KEsc -> unfocus
         KEnter -> do
-          old <- use (sesh . pomo)
+          old <- use (sesh . task)
           zoom ts $ handleTaskEvent (SelectWithOld old)
           unfocus
         _ -> pure ()
@@ -108,7 +109,7 @@ eventHandler ev = case ev of
           unfocus
           focus .= TaskForm
           showingTasks .= True
-        (KChar 'c') -> sesh . pomo .= Nothing
+        (KChar 'c') -> sesh . task .= Nothing
         _ -> pure ()
   _ -> pure ()
 
@@ -149,7 +150,7 @@ initApp =
     <*> pure exTasks
     <*> pure False
     <*> pure Unfocused
-    <*> pure defaultTaskForm
+    <*> defaultTaskForm
 
 appMain :: IO ()
 appMain = do

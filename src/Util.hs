@@ -13,17 +13,19 @@ import Lens.Micro.TH (makeLenses)
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
-import Data.Time (NominalDiffTime, addUTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 
-data Pomo = Pomo
+data Task = Task
   { _title :: Text
   , _nCompleted :: Int
   , _target :: Int
+  , _timeCreated :: UTCTime
+  , _timeFinished :: Maybe UTCTime
   }
 
-makeLenses ''Pomo
+makeLenses ''Task
 
-data PomoEvent = TimeLeft NominalDiffTime | Done | SelectTask Pomo
+data PomoEvent = TimeLeft NominalDiffTime | Done | SelectTask Task
 data PomoResource = TaskTitleField | TaskTargetField
   deriving (Eq, Ord, Show)
 
