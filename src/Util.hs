@@ -14,17 +14,17 @@ import Graphics.Vty (Color)
 import Lens.Micro.TH (makeLenses)
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (SomeException (SomeException), try)
+import Control.Exception (try)
 import Control.Monad (when)
-import Data.Aeson (FromJSON, ToJSON, decode, encode)
+import Data.Aeson (FromJSON, ToJSON, decode, decodeStrict, encode, encodeFile)
+import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
-import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Either (fromRight)
 import Data.Functor ((<&>))
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text qualified as Text
-import Data.Time (Day, LocalTime (localDay), NominalDiffTime, UTCTime (utctDay), ZonedTime (zonedTimeToLocalTime), addUTCTime, diffUTCTime, getCurrentTime, getZonedTime, zonedTimeToUTC)
-import Data.Time.Clock (nominalDiffTimeToSeconds)
+import Data.Time (Day, LocalTime (localDay), NominalDiffTime, ZonedTime (zonedTimeToLocalTime), addUTCTime, diffUTCTime, getCurrentTime, getZonedTime)
 import GHC.Generics (Generic)
 import GHC.IO.Exception (IOException (..))
 import Lens.Micro ((^.))
@@ -50,10 +50,11 @@ data PomoEvent
   | CompleteTask Task
   | RefreshStats
 
-data PomoResource = TaskTitleField | TaskTargetField | StatsWidget
+data PomoResource = TaskTitleField | TaskTargetField | StatsWidget | DayWidget Day
   deriving (Eq, Ord, Show)
 
 data AppFocus = Tasks | TaskForm | Unfocused
+  deriving (Eq, Ord, Show)
 
 data Activity = LWorked (Maybe Text) NominalDiffTime | LCompleted Text
   deriving (Show, Eq, Generic)
@@ -142,7 +143,7 @@ tasksFilePath = appDir <&> (</> "tasks.json")
 
 -- TODO: exception handling (?)
 saveTasks :: [Task] -> IO (())
-saveTasks tasks = tasksFilePath >>= \f -> LBS.writeFile f (encode tasks)
+saveTasks tasks = tasksFilePath >>= flip encodeFile tasks
 
 nullIfThrow :: IO [a] -> IO [a]
 nullIfThrow act = fromRight [] <$> try @IOException act
@@ -150,8 +151,8 @@ nullIfThrow act = fromRight [] <$> try @IOException act
 loadTasks :: IO [Task]
 loadTasks = nullIfThrow $ do
   filePath <- tasksFilePath
-  content <- LBS.readFile filePath
-  pure $ fromMaybe [] (decode content)
+  content <- BS.readFile filePath
+  pure $ fromMaybe [] (decodeStrict content)
 
 logActivity :: Activity -> IO ()
 logActivity a = do
@@ -162,9 +163,9 @@ logActivity a = do
 
 dayLogs :: Day -> IO [AppLog]
 dayLogs t = nullIfThrow $ do
-  contents <- LBS.readFile =<< logFile t
-  let contentL = filter (not . LBS8.null) (LBS8.lines contents)
-  pure $ mapMaybe decode contentL
+  contents <- BS.readFile =<< logFile t
+  let contentL = filter (not . BS8.null) (BS8.lines contents)
+  pure $ mapMaybe decodeStrict contentL
 
 todayLogs :: IO [AppLog]
 todayLogs = dayLogs =<< (zonedTimeToLocalDay <$> getZonedTime)

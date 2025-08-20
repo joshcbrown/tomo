@@ -7,15 +7,16 @@ import Brick.Forms
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
-import Data.Maybe (isJust)
+import Data.Functor ((<&>))
+import Data.Maybe (isJust, isNothing)
 import Data.Sequence (Seq (..), (<|), (|>))
 import Data.Sequence qualified as Seq
-import Data.Time (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTime, utctDay)
+import Data.Time (Day, LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTime, utctDay)
 import Data.Time.LocalTime (getZonedTime)
 import Graphics.Vty (Color, white)
 import Graphics.Vty.Attributes (brightWhite, yellow)
-import Lens.Micro ((^.))
-import Lens.Micro.Mtl (use, view, (%=), (.=))
+import Lens.Micro (to, (.~), (^.), (^?), (^?!), _Just)
+import Lens.Micro.Mtl (preview, use, view, (%=), (.=))
 import Lens.Micro.TH (makeLenses)
 import Pomodoro
 import Util hiding (saveTasks)
@@ -24,7 +25,8 @@ data Control
   = SelUp
   | SelDown
   | Deselect
-  | Delete
+  | DeleteSelected
+  | CompleteSelected
   | SelectWithOld (Maybe Task)
   | Add Task
   | Append Task
@@ -60,7 +62,19 @@ handleTaskEvent = \case
   SelUp -> addSel (-1)
   SelDown -> addSel 1
   Deselect -> selected .= Nothing
-  Delete -> use selected >>= maybe (pure ()) ((tasks %=) . Seq.deleteAt)
+  DeleteSelected -> do
+    use selected >>= maybe (pure ()) ((tasks %=) . Seq.deleteAt)
+    save
+  CompleteSelected ->
+    use selected >>= \case
+      Nothing -> pure ()
+      Just i -> do
+        t <- use tasks <&> (`Seq.index` i)
+        tasks %= Seq.deleteAt i
+        now <- liftIO getZonedTime
+        let newT = (timeFinished .~ Just now) t
+        tasks %= (|> newT)
+        save
   Add p -> do
     tasks %= (p <|)
     save
@@ -80,7 +94,9 @@ handleTaskEvent = \case
   Save -> save
   Load ts -> do
     today <- zonedTimeToLocalDay <$> liftIO getZonedTime
-    let filtered = filter ((== today) . zonedTimeToLocalDay . view timeCreated) ts
+
+    let finishedDay = (preview $ timeFinished . _Just . to zonedTimeToLocalDay)
+    let filtered = filter (maybe True (== today) . finishedDay) ts
     tasks .= Seq.fromList filtered
  where
   addSel :: Int -> EventM n TaskState ()

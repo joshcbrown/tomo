@@ -2,27 +2,27 @@
 
 module Stats where
 
-import Brick (EventM, Padding (Max), Widget, txt)
+import Brick (EventM, Widget, bg, clickable, hBox, txt)
+import Brick.AttrMap (AttrName, attrName)
 import Brick.Types (put)
-import Brick.Widgets.Core (padRight, vBox)
+import Brick.Util (fg)
+import Brick.Widgets.Core (vBox, withAttr, (<=>))
+import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
-import Data.Functor ((<&>))
 import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Monoid (Sum (..))
 import Data.Text (Text)
-import Data.Text.IO (hPutStrLn)
-import Data.Time (Day, NominalDiffTime, ZonedTime (zonedTimeToLocalTime), addLocalTime, addUTCTime, getCurrentTime, nominalDay, nominalDiffTimeToSeconds, utctDay, zonedTimeToUTC)
-import Data.Time.Clock (UTCTime (..), diffUTCTime)
+import Data.Time (Day, NominalDiffTime, ZonedTime (zonedTimeToLocalTime), addLocalTime, nominalDay, nominalDiffTimeToSeconds, weekAllDays)
+import Data.Time.Calendar (DayOfWeek (Sunday))
 import Data.Time.LocalTime (getZonedTime, localDay)
 import GHC.Generics (Generic)
-import GHC.IO.StdHandles (stderr)
-import Graphics.Vty.Attributes (brightWhite)
-import Lens.Micro (Traversal', foldMapOf, (^.))
+import Graphics.Vty (Attr, Color (..))
+import Graphics.Vty.Attributes (brightWhite, color240, yellow)
+import Lens.Micro (Traversal', foldMapOf, folded, to, (^.), (^..), _1, _2)
 import Lens.Micro.Mtl ((.=))
 import Lens.Micro.TH (makeLenses)
 import Lens.Micro.Type (Getting)
-import System.Process.Internals (ProcRetHandles (hStdError))
 import Util
 
 data DayStats = DayStats {_workTime :: NominalDiffTime}
@@ -30,10 +30,12 @@ data DayStats = DayStats {_workTime :: NominalDiffTime}
 
 makeLenses ''DayStats
 
-data StatsState = StatsState {_days :: Map Day DayStats}
+data StatsState = StatsState {_days :: Map Day DayStats, _selectedDay :: Day, _weeks :: [[Day]]}
   deriving (Eq, Show, Generic)
 
 makeLenses ''StatsState
+
+data StateEvent = Refresh | SelectDay Day
 
 _LWorkedTime :: Traversal' Activity NominalDiffTime
 _LWorkedTime f (LWorked desc t) = LWorked desc <$> f t
@@ -45,20 +47,34 @@ sumOf l = getSum . foldMapOf l Sum
 workedTime :: [Activity] -> NominalDiffTime
 workedTime = sumOf (traverse . _LWorkedTime)
 
-priorWeek :: IO [Day]
-priorWeek = do
-  t <- zonedTimeToLocalTime <$> getZonedTime
-  let foo i = negate (fromIntegral i * nominalDay)
-  pure [localDay $ addLocalTime (foo i) t | i <- [0 :: Int .. 6]]
+priorYearDays :: ZonedTime -> [Day]
+priorYearDays t =
+  let
+    foo i = localDay $ addLocalTime (negate (fromIntegral @Int i * nominalDay)) (zonedTimeToLocalTime t)
+   in
+    [foo i | i <- [0 .. 372]]
+
+lastYearWeeks :: ZonedTime -> [[Day]]
+lastYearWeeks t =
+  let
+    today = zonedTimeToLocalDay t
+    foo i = localDay $ addLocalTime (negate (fromIntegral @Int i * nominalDay * 7)) (zonedTimeToLocalTime t)
+   in
+    [weekAllDays Sunday (foo i) | i <- [52, 51 .. 1]] ++ [filter (<= today) (weekAllDays Sunday today)]
+
+statsFromLogs :: [AppLog] -> DayStats
+statsFromLogs = DayStats . workedTime . map activity
 
 getStats :: IO StatsState
 getStats = do
-  week <- priorWeek
-  foo <- traverse dayLogs =<< priorWeek
-  pure . StatsState $ Map.fromList $ zip week $ map (DayStats . workedTime . (map activity)) foo
+  now <- getZonedTime
+  daysStats <- (traverse (\d -> (,) <$> pure d <*> (statsFromLogs <$> dayLogs d))) (priorYearDays now)
+  pure $ StatsState (Map.fromList daysStats) (zonedTimeToLocalDay now) (lastYearWeeks now)
 
-refreshState :: EventM PomoResource StatsState ()
-refreshState = put =<< liftIO getStats
+handleStatsEvent :: StateEvent -> EventM PomoResource StatsState ()
+handleStatsEvent = \case
+  Refresh -> put =<< liftIO getStats
+  SelectDay d -> selectedDay .= d
 
 statPretty :: Day -> DayStats -> Text
 statPretty day s =
@@ -68,5 +84,59 @@ statPretty day s =
 statsW :: StatsState -> Widget PomoResource
 statsW s =
   bord brightWhite "stats" $
-    vBox $
-      map (padRight Max . txt . uncurry statPretty) (Map.toList (s ^. days))
+    (hBox $ map vBox $ daysTransformed)
+      <=> selectSummary
+ where
+  maxDay :: NominalDiffTime
+  maxDay = maximum $ (^. workTime) <$> (s ^. days)
+
+  -- TODO: surely there is a lens-y way to do this
+  daysTransformed :: [[Widget PomoResource]]
+  daysTransformed = flip (map . map) (s ^. weeks) $
+    \day -> case Map.lookup day (s ^. days) of
+      Nothing -> txt "x"
+      Just stat ->
+        let getAttr = if (day == s ^. selectedDay) then contribAttrHighlight else contribAttr
+            attr = getAttr . valueToLevel $ (stat ^. workTime) / maxDay
+         in clickable (DayWidget day) $ withAttr attr (txt "■")
+
+  selectSummary :: Widget PomoResource
+  selectSummary =
+    let day = s ^. selectedDay
+     in txt $ case (Map.lookup day (s ^. days)) of
+          Nothing -> tShow day <> " - not found"
+          Just stat -> statPretty day stat
+
+data Level = L0 | L1 | L2 | L3 | L4
+  deriving (Eq, Show, Enum)
+
+valueToLevel :: NominalDiffTime -> Level
+valueToLevel val
+  | val == 0.0 = L0
+  | val <= 0.1 = L1
+  | val <= 0.3 = L2
+  | val <= 0.6 = L3
+  | otherwise = L4
+
+levelToColor :: Level -> Color
+levelToColor = \case
+  L0 -> c 21 27 34
+  L1 -> c 2 58 22
+  L2 -> c 25 108 46
+  L3 -> c 46 160 67
+  L4 -> c 86 211 100
+ where
+  c r g b = color240 @Int r g b
+
+contribAttr :: Level -> AttrName
+contribAttr level = attrName $ "contribution-" ++ show level
+
+contribAttrHighlight :: Level -> AttrName
+contribAttrHighlight level = attrName ("contribution-" ++ show level) <> attrName ("-highlight")
+
+levelAttrMap :: [(AttrName, Attr)]
+levelAttrMap =
+  join
+    [ [(contribAttr level, fg (levelToColor level)), (contribAttrHighlight level, bg yellow)]
+    | level <- [L0, L1, L2, L3, L4]
+    ]
