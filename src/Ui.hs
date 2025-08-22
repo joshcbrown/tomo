@@ -11,11 +11,12 @@ import Brick.Forms (Form (formState), focusedFormInputAttr, handleFormEvent, inv
 import Brick.Main
 import Brick.Util (bg, fg, on)
 import Brick.Widgets.Border (borderAttr)
-import Brick.Widgets.Center (hCenterLayer, vCenterLayer)
+import Brick.Widgets.Center (centerLayer, hCenterLayer, vCenterLayer)
 import Brick.Widgets.Core (hLimit)
 import Brick.Widgets.Edit (editFocusedAttr)
 import Brick.Widgets.ProgressBar (progressCompleteAttr)
 import Control.Monad.IO.Class (liftIO)
+import Data.Bool (bool)
 import Data.Foldable (toList)
 import Data.Maybe (catMaybes)
 import Data.Sequence qualified as Seq
@@ -50,11 +51,12 @@ data AppState = AppState
   { _chan :: BChan PomoEvent
   , _sesh :: PomoSession
   , _ts :: TaskState
-  , _showingTasks :: Bool
   , _focus :: AppFocus
   , _taskForm :: Form TaskFormState PomoEvent PomoResource
   , _stats :: StatsState
+  , _showingTasks :: Bool
   , _showingStats :: Bool
+  , _showingHelp :: Bool
   }
 
 makeLenses ''AppState
@@ -62,7 +64,7 @@ makeLenses ''AppState
 unfocus :: EventM PomoResource AppState ()
 unfocus = do
   zoom ts $ handleTaskEvent Deselect
-  focus .= Unfocused
+  focus .= Pomo
 
 eventHandler :: BrickEvent PomoResource PomoEvent -> EventM PomoResource AppState ()
 eventHandler ev = case ev of
@@ -80,7 +82,7 @@ eventHandler ev = case ev of
   (VtyEvent (EvKey k [])) -> do
     use focus >>= \case
       TaskForm -> case k of
-        KEsc -> focus .= Unfocused
+        KEsc -> focus .= Pomo
         KEnter -> do
           t <- liftIO getZonedTime
           state <- formState <$> use taskForm
@@ -95,6 +97,7 @@ eventHandler ev = case ev of
         (KChar 'n') -> use chan >>= zoom sesh . skip
         (KChar 't') -> showingTasks %= not
         (KChar 's') -> showingStats %= not
+        (KChar '?') -> showingHelp %= not
         (KChar 'i') -> do
           unfocus
           focus .= TaskForm
@@ -115,7 +118,7 @@ eventHandler ev = case ev of
               zoom ts $ handleTaskEvent (SelectWithOld old)
               unfocus
             _ -> pure ()
-          Unfocused -> case k of
+          Pomo -> case k of
             (KChar 'c') -> zoom sesh $ handlePomoEvent Complete
             -- it would technically work to have these be global but clearer this way
             (KChar 'j') -> do
@@ -146,7 +149,10 @@ draw s =
             else Nothing
         ]
    in
-    [vCenterLayer $ vBox $ map hCenterLayer ws]
+    catMaybes
+      [ if s ^. showingHelp then Just (centerLayer . helpW $ s ^. focus) else Nothing
+      , Just $ vCenterLayer $ vBox $ map hCenterLayer ws
+      ]
 
 app :: App AppState PomoEvent PomoResource
 app =
@@ -181,10 +187,11 @@ initApp = do
       , _sesh = initSesh
       , _ts = initTs
       , _showingTasks = True
-      , _focus = Unfocused
+      , _focus = Pomo
       , _taskForm = initTaskForm
       , _stats = initStats
       , _showingStats = True
+      , _showingHelp = False
       }
 
 appMain :: IO ()

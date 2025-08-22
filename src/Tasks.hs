@@ -154,8 +154,8 @@ mkTaskForm t n =
   let label s w =
         (vLimit 1 $ hLimit 15 $ str s <+> fill ' ') <+> w
    in newForm
-        [ label "title" @@= editTextField (res . title) TaskTitleField (Just 1)
-        , label "target" @@= optionalEditField (res . target) TaskTargetField
+        [ label "Title:" @@= editTextField (res . title) TaskTitleField (Just 1)
+        , label "Target cycles:" @@= optionalEditField (res . target) TaskTargetField
         ]
         (TaskFormState t n)
 

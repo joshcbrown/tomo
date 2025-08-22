@@ -10,7 +10,7 @@ import Brick.Widgets.Border.Style (unicodeRounded)
 import Brick.Widgets.Core (updateAttrMap, withAttr, withBorderStyle)
 import Brick.Widgets.ProgressBar (progressCompleteAttr)
 import Data.Text (Text)
-import Graphics.Vty (Color)
+import Graphics.Vty (Color, yellow)
 import Lens.Micro.TH (makeLenses)
 
 import Control.Concurrent (threadDelay)
@@ -53,7 +53,7 @@ data PomoEvent
 data PomoResource = TaskTitleField | TaskTargetField | StatsWidget | DayWidget Day
   deriving (Eq, Ord, Show)
 
-data AppFocus = Tasks | TaskForm | Unfocused
+data AppFocus = Tasks | TaskForm | Pomo
   deriving (Eq, Ord, Show)
 
 data Activity = LWorked (Maybe Text) NominalDiffTime | LCompleted Text
@@ -173,3 +173,49 @@ todayLogs = dayLogs =<< (zonedTimeToLocalDay <$> getZonedTime)
 -- misc
 zonedTimeToLocalDay :: ZonedTime -> Day
 zonedTimeToLocalDay = localDay . zonedTimeToLocalTime
+
+helpText :: AppFocus -> Text
+helpText focus =
+  Text.intercalate "\n" $
+    [ "Welcome! Getting around in tomo is done nearly entirely with the keyboard."
+    , "Key binds are context sensitive. There are broadly three contexts to be aware of:\n"
+    , Text.intercalate "\n\n" $ case focus of
+        Pomo -> [helpTextFor Pomo, helpTextFor Tasks, helpTextFor TaskForm]
+        Tasks -> [helpTextFor Tasks, helpTextFor TaskForm, helpTextFor Pomo]
+        TaskForm -> undefined
+    , "\nAdditionally, you can click on any square in the stats area to view how long"
+    , "you worked for that day."
+    , "\nUse [?] to exit from this menu."
+    ]
+ where
+  helpTextFor :: AppFocus -> Text
+  helpTextFor focus' = Text.intercalate "\n" $ case focus' of
+    Pomo ->
+      [ "When the timer is focused (as when the app is first opened):"
+      , "[q]uit the app"
+      , "[p]ause the timer"
+      , "[n]ext: skip the current timer"
+      , "[t]asks: show/hide the task area"
+      , "[s]tats: show/hide the stats area"
+      , "[c]omplete task currently being worked on"
+      , "[i]nsert a task"
+      , "[j]/[k]: focus tasks area"
+      ]
+    Tasks ->
+      [ "When tasks are focused:"
+      , "[j]: move selection down"
+      , "[k]: move selection up"
+      , "[Esc]: move focus to pomo"
+      , "[Enter]: work on selected task"
+      , "[d]elete the selected task"
+      , "[c]omplete selected task"
+      , "[e]dit selected task"
+      ]
+    TaskForm ->
+      [ "When editing a task:"
+      , "[Enter]: add task to task list"
+      , "[Esc]: abort"
+      ]
+
+helpW :: AppFocus -> Widget PomoResource
+helpW = bord yellow "Help" . txt . helpText
