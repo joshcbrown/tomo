@@ -54,7 +54,7 @@ data AppState = AppState
   , _ts :: TaskState
   , _showingTasks :: Bool
   , _focus :: AppFocus
-  , _taskForm :: Form Task PomoEvent PomoResource
+  , _taskForm :: Form TaskFormState PomoEvent PomoResource
   , _stats :: StatsState
   , _showingStats :: Bool
   }
@@ -85,9 +85,11 @@ eventHandler ev = case ev of
         KEsc -> focus .= Unfocused
         KEnter -> do
           t <- liftIO getZonedTime
-          pom <- (timeCreated .~ t) . formState <$> use taskForm
+          state <- formState <$> use taskForm
+          let updateTime = if state ^. new then timeCreated .~ t else id
+              pom = updateTime (state ^. res)
           zoom ts $ handleTaskEvent (Add pom)
-          liftIO defaultTaskForm >>= (taskForm .=)
+          liftIO newTaskForm >>= (taskForm .=)
         _ -> zoom taskForm $ handleFormEvent ev
       f -> case k of
         (KChar 'p') -> use chan >>= zoom sesh . toggleTimer
@@ -105,6 +107,10 @@ eventHandler ev = case ev of
             (KChar 'j') -> zoom ts $ handleTaskEvent SelDown
             (KChar 'k') -> zoom ts $ handleTaskEvent SelUp
             (KChar 'c') -> zoom ts $ handleTaskEvent CompleteSelected
+            (KChar 'e') -> do
+              focus .= TaskForm
+              cur <- zoom ts $ getSelected
+              maybe (pure ()) ((taskForm .=) . flip mkTaskForm False) cur
             KEsc -> unfocus
             KEnter -> do
               old <- use (sesh . task)
@@ -132,7 +138,7 @@ draw s =
       catMaybes
         [ Just $ hLimit 30 (pomoW $ s ^. sesh)
         , if (s ^. focus == TaskForm)
-            then Just $ hLimit 30 $ bord yellow "new task" (renderForm (s ^. taskForm))
+            then Just $ hLimit 30 $ bord yellow "New task" (renderForm (s ^. taskForm))
             else Nothing
         , if (s ^. showingTasks)
             then Just $ hLimit 30 $ tasksW (s ^. ts)
@@ -171,7 +177,7 @@ initApp =
     <*> pure exTasks
     <*> pure True
     <*> pure Unfocused
-    <*> defaultTaskForm
+    <*> newTaskForm
     <*> getStats
     <*> pure False
 

@@ -11,6 +11,9 @@ import Data.Functor ((<&>))
 import Data.Maybe (isJust, isNothing)
 import Data.Sequence (Seq (..), (<|), (|>))
 import Data.Sequence qualified as Seq
+import Data.Text qualified as Text
+import Data.Text.Internal.Lazy (Text)
+import Data.Text.Read qualified as Text.Read
 import Data.Time (Day, LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTime, utctDay)
 import Data.Time.LocalTime (getZonedTime)
 import Graphics.Vty (Color, white)
@@ -18,7 +21,10 @@ import Graphics.Vty.Attributes (brightWhite, yellow)
 import Lens.Micro (to, (.~), (^.), (^?), (^?!), _Just)
 import Lens.Micro.Mtl (preview, use, view, (%=), (.=))
 import Lens.Micro.TH (makeLenses)
+import Lens.Micro.Type (Lens')
 import Pomodoro
+import Text.Read (readMaybe)
+import Text.Read qualified as Text
 import Util hiding (saveTasks)
 
 data Control
@@ -51,13 +57,26 @@ exTasks =
 
 makeLenses ''TaskState
 
+data TaskFormState = TaskFormState
+  { _res :: Task
+  , _new :: Bool
+  }
+
+makeLenses ''TaskFormState
+
 save :: EventM n TaskState ()
 save = do
   ts <- use tasks
   f <- use saveTasks'
   liftIO $ f (toList ts)
 
-handleTaskEvent :: Control -> EventM n TaskState ()
+getSelected :: EventM PomoResource TaskState (Maybe Task)
+getSelected = do
+  mi <- use selected
+  ts <- use tasks
+  pure $ (`Seq.lookup` ts) =<< mi
+
+handleTaskEvent :: Control -> EventM PomoResource TaskState ()
 handleTaskEvent = \case
   SelUp -> addSel (-1)
   SelDown -> addSel 1
@@ -123,20 +142,30 @@ tasksW ts =
    in if null blah
         then txt "no tasks ([i] to insert task)"
         else
-          bord (col $ isJust (ts ^. selected)) "tasks" $
+          bord (col $ isJust (ts ^. selected)) "Tasks" $
             vBox $
               blah
 
-mkTaskForm :: Task -> Form Task PomoEvent PomoResource
-mkTaskForm =
+optionalEditField :: (Ord n, Show n, Show a, Read a) => Lens' s (Maybe a) -> n -> s -> FormFieldState s e n
+optionalEditField lens name =
+  let validate ls =
+        let t = Text.strip (Text.intercalate "\n" ls)
+         in if Text.null t
+              then Just Nothing
+              else readMaybe (Text.unpack t) >>= Just
+   in editField lens name (Just 1) (const "") validate (txt . Text.unlines) id
+
+mkTaskForm :: Task -> Bool -> Form TaskFormState PomoEvent PomoResource
+mkTaskForm t n =
   let label s w =
         (vLimit 1 $ hLimit 15 $ str s <+> fill ' ') <+> w
    in newForm
-        [ label "title" @@= editTextField title TaskTitleField (Just 1)
-        , label "target" @@= editShowableField target TaskTargetField
+        [ label "title" @@= editTextField (res . title) TaskTitleField (Just 1)
+        , label "target" @@= optionalEditField (res . target) TaskTargetField
         ]
+        (TaskFormState t n)
 
-defaultTaskForm :: IO (Form Task PomoEvent PomoResource)
-defaultTaskForm = do
+newTaskForm :: IO (Form TaskFormState PomoEvent PomoResource)
+newTaskForm = do
   t <- getZonedTime
-  pure $ mkTaskForm (Task "" 0 0 t Nothing)
+  pure $ mkTaskForm (Task "" 0 Nothing t Nothing) True

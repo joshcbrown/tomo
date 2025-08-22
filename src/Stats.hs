@@ -83,7 +83,7 @@ statPretty day s =
 
 statsW :: StatsState -> Widget PomoResource
 statsW s =
-  bord brightWhite "stats" $
+  bord brightWhite "Stats" $
     (hBox $ map vBox $ daysTransformed)
       <=> selectSummary
  where

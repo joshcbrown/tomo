@@ -34,7 +34,7 @@ import System.FilePath ((</>))
 data Task = Task
   { _title :: Text
   , _nCompleted :: Int
-  , _target :: Int
+  , _target :: Maybe Int
   , _timeCreated :: ZonedTime
   , _timeFinished :: Maybe ZonedTime
   }
@@ -76,7 +76,7 @@ tShow :: (Show a) => a -> Text
 tShow = Text.pack . show
 
 taskPretty :: Task -> Text
-taskPretty p = prefix <> p ^. title <> " (" <> tShow (p ^. nCompleted) <> "/" <> tShow (p ^. target) <> ")"
+taskPretty p = prefix <> p ^. title <> " (" <> tShow (p ^. nCompleted) <> "/" <> maybe "-" tShow (p ^. target) <> ")"
  where
   prefix = if isJust (p ^. timeFinished) then "× " else "· "
 
