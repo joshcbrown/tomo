@@ -8,26 +8,21 @@ import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
 import Data.Functor ((<&>))
-import Data.Maybe (isJust, isNothing)
+import Data.Maybe (isJust)
 import Data.Sequence (Seq (..), (<|), (|>))
 import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
-import Data.Text.Internal.Lazy (Text)
-import Data.Text.Read qualified as Text.Read
-import Data.Time (Day, LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTime, utctDay)
 import Data.Time.LocalTime (getZonedTime)
 import Graphics.Vty (Color, white)
-import Graphics.Vty.Attributes (brightWhite, yellow)
-import Lens.Micro (to, (.~), (^.), (^?), (^?!), _Just)
-import Lens.Micro.Mtl (preview, use, view, (%=), (.=))
+import Graphics.Vty.Attributes (yellow)
+import Lens.Micro (to, (.~), (^.), _Just)
+import Lens.Micro.Mtl (preview, use, (%=), (.=))
 import Lens.Micro.TH (makeLenses)
 import Lens.Micro.Type (Lens')
-import Pomodoro
 import Text.Read (readMaybe)
-import Text.Read qualified as Text
 import Util hiding (saveTasks)
 
-data Control
+data TaskControl
   = SelUp
   | SelDown
   | Deselect
@@ -41,16 +36,16 @@ data Control
 
 data TaskState = TaskState
   { _tasks :: Seq Task
-  , _selected :: Maybe Int
+  , _selectedTask :: Maybe Int
   , _sendTask :: Task -> IO ()
   , _saveTasks' :: [Task] -> IO ()
   }
 
-exTasks :: TaskState
-exTasks =
+defaultTaskSession :: TaskState
+defaultTaskSession =
   TaskState
     { _tasks = Seq.fromList []
-    , _selected = Nothing
+    , _selectedTask = Nothing
     , _sendTask = \_ -> pure ()
     , _saveTasks' = \_ -> pure ()
     }
@@ -72,20 +67,20 @@ save = do
 
 getSelected :: EventM PomoResource TaskState (Maybe Task)
 getSelected = do
-  mi <- use selected
+  mi <- use selectedTask
   ts <- use tasks
   pure $ (`Seq.lookup` ts) =<< mi
 
-handleTaskEvent :: Control -> EventM PomoResource TaskState ()
+handleTaskEvent :: TaskControl -> EventM PomoResource TaskState ()
 handleTaskEvent = \case
   SelUp -> addSel (-1)
   SelDown -> addSel 1
-  Deselect -> selected .= Nothing
+  Deselect -> selectedTask .= Nothing
   DeleteSelected -> do
-    use selected >>= maybe (pure ()) ((tasks %=) . Seq.deleteAt)
+    use selectedTask >>= maybe (pure ()) ((tasks %=) . Seq.deleteAt)
     save
   CompleteSelected ->
-    use selected >>= \case
+    use selectedTask >>= \case
       Nothing -> pure ()
       Just i -> do
         t <- use tasks <&> (`Seq.index` i)
@@ -102,7 +97,7 @@ handleTaskEvent = \case
     save
   SelectWithOld old -> do
     f <- use sendTask
-    idx <- use selected
+    idx <- use selectedTask
     case idx of
       Just i -> do
         t <- (`Seq.index` i) <$> use tasks
@@ -122,29 +117,28 @@ handleTaskEvent = \case
   addSel i = do
     l <- Seq.length <$> use tasks
     when (l > 0) $ do
-      cur <- use selected
-      selected .= case cur of
+      cur <- use selectedTask
+      selectedTask .= case cur of
         Nothing -> Just 0
         Just n -> Just ((n + i) `mod` l)
 
-col :: Bool -> Color
-col focused = if focused then yellow else white
+colourFocused :: Bool -> Color
+colourFocused focused = if focused then yellow else white
 
 tasksW :: TaskState -> Widget n
 tasksW ts =
-  let blah = toList $
+  let taskWidgetList = toList $
         flip Seq.mapWithIndex (ts ^. tasks) $
           \i t ->
             padRight Max $
-              if ts ^. selected == Just i
+              if ts ^. selectedTask == Just i
                 then withAttr (attrName "accent") (txt (taskPretty t))
                 else txt (taskPretty t)
-   in if null blah
+   in if null taskWidgetList
         then txt "no tasks ([i] to insert task)"
         else
-          bord (col $ isJust (ts ^. selected)) "Tasks" $
-            vBox $
-              blah
+          bord (colourFocused $ isJust (ts ^. selectedTask)) "Tasks" $
+            vBox taskWidgetList
 
 optionalEditField :: (Ord n, Show n, Show a, Read a) => Lens' s (Maybe a) -> n -> s -> FormFieldState s e n
 optionalEditField lens name =

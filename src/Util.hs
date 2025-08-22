@@ -16,7 +16,7 @@ import Lens.Micro.TH (makeLenses)
 import Control.Concurrent (threadDelay)
 import Control.Exception (try)
 import Control.Monad (when)
-import Data.Aeson (FromJSON, ToJSON, decode, decodeStrict, encode, encodeFile)
+import Data.Aeson (FromJSON, ToJSON, decodeStrict, encode, encodeFile)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
@@ -100,12 +100,12 @@ time tickDuration duration notify = getCurrentTime >>= go
         _ -> loop (tickN + 1)
 
 bord :: Color -> Text -> Widget n -> Widget n
-bord col title w =
+bord col bTitle w =
   updateAttrMap updateM $
     withBorderStyle unicodeRounded $
       borderWithLabel titleW w
  where
-  titleW = withAttr (attrName "highlight") $ txt title <+> fill ('─')
+  titleW = withAttr (attrName "highlight") $ txt bTitle <+> fill ('─')
   updateM =
     applyAttrMappings
       [ (borderAttr, fg col)

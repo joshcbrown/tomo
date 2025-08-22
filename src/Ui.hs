@@ -4,30 +4,28 @@ module Ui where
 
 import Data.Time
 
-import Brick (BrickEvent (..), EventM, Widget, hBox, vBox, zoom)
+import Brick (BrickEvent (..), EventM, Widget, vBox, zoom)
 import Brick.AttrMap (AttrMap, attrMap, attrName)
 import Brick.BChan (BChan, newBChan, writeBChan)
 import Brick.Forms (Form (formState), focusedFormInputAttr, handleFormEvent, invalidFormInputAttr, renderForm)
 import Brick.Main
 import Brick.Util (bg, fg, on)
 import Brick.Widgets.Border (borderAttr)
-import Brick.Widgets.Center (center, hCenter, hCenterLayer, vCenter, vCenterLayer)
-import Brick.Widgets.Core (hLimit, (<=>))
+import Brick.Widgets.Center (hCenterLayer, vCenterLayer)
+import Brick.Widgets.Core (hLimit)
 import Brick.Widgets.Edit (editFocusedAttr)
 import Brick.Widgets.ProgressBar (progressCompleteAttr)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
 import Data.Maybe (catMaybes)
-import Data.Text.IO (hPutStrLn)
+import Data.Sequence qualified as Seq
 import Graphics.Vty as Vty
 import Graphics.Vty.CrossPlatform (mkVty)
-import Lens.Micro ((%~), (&), (.~), (^.))
+import Lens.Micro ((&), (.~), (^.))
 import Lens.Micro.Mtl (use, (%=), (.=))
 import Lens.Micro.TH (makeLenses)
 import Pomodoro
 import Stats
-import System.IO (stderr)
-import System.Process.Internals (ProcRetHandles (hStdError))
 import Tasks
 import Util
 
@@ -68,13 +66,13 @@ unfocus = do
 
 eventHandler :: BrickEvent PomoResource PomoEvent -> EventM PomoResource AppState ()
 eventHandler ev = case ev of
-  (AppEvent t) -> do
-    case t of
+  (AppEvent e) -> do
+    case e of
       SaveTasks taskList -> saveTs taskList
-      TimerEvent t -> do
-        zoom sesh $ handle t
+      TimerEvent task -> do
+        zoom sesh $ handlePomoEvent task
         use (ts . tasks) >>= saveTs . toList
-      CompleteTask t -> zoom ts $ handleTaskEvent (Append t)
+      CompleteTask task -> zoom ts $ handleTaskEvent (Append task)
       RefreshStats -> zoom stats $ handleStatsEvent Refresh
   MouseDown n _ _ _ -> case n of
     DayWidget day -> zoom stats $ handleStatsEvent (SelectDay day)
@@ -113,12 +111,12 @@ eventHandler ev = case ev of
               maybe (pure ()) ((taskForm .=) . flip mkTaskForm False) cur
             KEsc -> unfocus
             KEnter -> do
-              old <- use (sesh . task)
+              old <- use (sesh . focusedTask)
               zoom ts $ handleTaskEvent (SelectWithOld old)
               unfocus
             _ -> pure ()
           Unfocused -> case k of
-            (KChar 'c') -> zoom sesh $ handle Complete
+            (KChar 'c') -> zoom sesh $ handlePomoEvent Complete
             -- it would technically work to have these be global but clearer this way
             (KChar 'j') -> do
               focus .= Tasks
@@ -129,7 +127,7 @@ eventHandler ev = case ev of
             _ -> pure ()
   _ -> pure ()
  where
-  saveTs taskList = use (sesh . task) >>= liftIO . saveTasks . maybe taskList ((: taskList))
+  saveTs taskList = use (sesh . focusedTask) >>= liftIO . saveTasks . maybe taskList ((: taskList))
 
 draw :: AppState -> [Widget PomoResource]
 draw s =
@@ -156,13 +154,6 @@ app =
     { appDraw = draw
     , appHandleEvent = eventHandler
     , appStartEvent = do
-        -- TODO: move all this shit to initApp
-        c <- use chan
-        ts . sendTask .= \t -> writeBChan c (TimerEvent (SelectTask t))
-        ts . saveTasks' .= \xs -> writeBChan c (SaveTasks xs)
-        sesh . complete .= \t -> writeBChan c (CompleteTask t)
-        sesh . Pomodoro.logActivity .= \a -> liftIO (Util.logActivity a) *> writeBChan c RefreshStats
-        liftIO loadTasks >>= zoom ts . handleTaskEvent . Load
         vty <- getVtyHandle
         liftIO $ Vty.setMode (Vty.outputIface vty) Vty.Mouse True
     , appAttrMap = const attrs
@@ -170,16 +161,31 @@ app =
     }
 
 initApp :: IO AppState
-initApp =
-  AppState
-    <$> newBChan 10
-    <*> pure ex
-    <*> pure exTasks
-    <*> pure True
-    <*> pure Unfocused
-    <*> newTaskForm
-    <*> getStats
-    <*> pure False
+initApp = do
+  c <- newBChan 10
+  loadedTasks <- loadTasks
+  initTaskForm <- newTaskForm
+  initStats <- getStats
+  let initTs =
+        defaultTaskSession
+          & (sendTask .~ \t -> writeBChan c (TimerEvent (SelectTask t)))
+          & (saveTasks' .~ \xs -> writeBChan c (SaveTasks xs))
+          & (tasks .~ Seq.fromList loadedTasks)
+      initSesh =
+        defaultPomoSession
+          & (complete .~ \t -> writeBChan c (CompleteTask t))
+          & (Pomodoro.logActivity .~ \a -> liftIO (Util.logActivity a) *> writeBChan c RefreshStats)
+  pure
+    AppState
+      { _chan = c
+      , _sesh = initSesh
+      , _ts = initTs
+      , _showingTasks = True
+      , _focus = Unfocused
+      , _taskForm = initTaskForm
+      , _stats = initStats
+      , _showingStats = True
+      }
 
 appMain :: IO ()
 appMain = do
