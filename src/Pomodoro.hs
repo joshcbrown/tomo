@@ -32,7 +32,7 @@ data PomoSession = PomoSession
   , _cycleType :: CycleType
   , _cycleDuration :: NominalDiffTime
   , _remainingCycleDuration :: NominalDiffTime
-  , _timeSincePause :: NominalDiffTime
+  , _timeRemainingAtPause :: NominalDiffTime
   , _cycle :: Int
   , _timerThread :: TimerData
   , _complete :: Task -> IO ()
@@ -48,7 +48,7 @@ defaultPomoSession =
         Nothing
     , _cycleType = Work
     , _cycleDuration = workLength
-    , _timeSincePause = workLength
+    , _timeRemainingAtPause = workLength
     , _cycle = 1
     , _remainingCycleDuration = workLength
     , _timerThread = YetToStart
@@ -73,8 +73,9 @@ getTitle = preuse (focusedTask . _Just . title)
 logActivity' :: Activity -> EventM PomoResource PomoSession ()
 logActivity' a = use logActivity >>= \f -> liftIO (f a)
 
-logWorked :: NominalDiffTime -> EventM PomoResource PomoSession ()
-logWorked t =
+logWorked :: EventM PomoResource PomoSession ()
+logWorked = do
+  t <- (-) <$> use timeRemainingAtPause <*> use remainingCycleDuration
   use cycleType >>= \case
     Work -> getTitle >>= logActivity' . flip LWorked t
     _ -> pure ()
@@ -87,11 +88,10 @@ toggleTimer chan =
   use timerThread
     >>= \case
       Playing tid -> do
-        t <- (-) <$> use timeSincePause <*> use remainingCycleDuration
-        logWorked t
+        (timeRemainingAtPause .=) =<< use remainingCycleDuration
+        logWorked
         liftIO (killThread tid) *> (timerThread .= Paused)
       _ -> do
-        (timeSincePause .=) =<< use remainingCycleDuration
         startTimer chan
 
 startTimer :: BChan PomoEvent -> EventM PomoResource PomoSession ()
@@ -124,7 +124,7 @@ handlePomoEvent = \case
  where
   nextCycle :: Bool -> EventM PomoResource PomoSession ()
   nextCycle logRemaining = do
-    when logRemaining $ use timeSincePause >>= logWorked
+    when logRemaining $ logWorked
     timerThread .= YetToStart
     let workTrans = (cycle += 1) *> pure (Work, workLength)
     (newTy, newLength) <-
@@ -141,7 +141,7 @@ handlePomoEvent = \case
     cycleType .= newTy
     remainingCycleDuration .= newLength
     cycleDuration .= newLength
-    timeSincePause .= newLength
+    timeRemainingAtPause .= newLength
     notifyMac
 
   notifyMac :: EventM n PomoSession ()
@@ -185,7 +185,7 @@ pomoW p =
     Playing _ -> ""
     YetToStart -> " - yet to begin"
     Paused -> " - paused"
-  workingOn pom = txt $ "Working on: " <> pom ^. title <> " (" <> tShow (pom ^. nCompleted) <> "/" <> tShow (pom ^. target) <> ")"
+  workingOn task = txt $ taskDescPretty task
   rest =
     [ txt $ "Cycle: " <> tShow (p ^. cycle)
     , txt $ "Remaining: " <> tShow minutes <> "m" <> tShow seconds <> "s"

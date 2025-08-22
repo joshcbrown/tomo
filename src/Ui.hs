@@ -16,7 +16,6 @@ import Brick.Widgets.Core (hLimit)
 import Brick.Widgets.Edit (editFocusedAttr)
 import Brick.Widgets.ProgressBar (progressCompleteAttr)
 import Control.Monad.IO.Class (liftIO)
-import Data.Bool (bool)
 import Data.Foldable (toList)
 import Data.Maybe (catMaybes)
 import Data.Sequence qualified as Seq
@@ -109,8 +108,11 @@ eventHandler ev = case ev of
             (KChar 'k') -> zoom ts $ handleTaskEvent SelUp
             (KChar 'c') -> zoom ts $ handleTaskEvent CompleteSelected
             (KChar 'e') -> do
-              focus .= TaskForm
               cur <- zoom ts $ getSelected
+              -- FIXME: if user quits when editing, the task is lost
+              zoom ts $ handleTaskEvent DeleteSelected
+              zoom ts $ handleTaskEvent Deselect
+              focus .= TaskForm
               maybe (pure ()) ((taskForm .=) . flip mkTaskForm False) cur
             KEsc -> unfocus
             KEnter -> do

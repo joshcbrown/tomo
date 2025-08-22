@@ -75,10 +75,13 @@ instance FromJSON Task
 tShow :: (Show a) => a -> Text
 tShow = Text.pack . show
 
+taskDescPretty :: Task -> Text
+taskDescPretty t = t ^. title <> " (" <> tShow (t ^. nCompleted) <> "/" <> maybe "-" tShow (t ^. target) <> ")"
+
 taskPretty :: Task -> Text
-taskPretty p = prefix <> p ^. title <> " (" <> tShow (p ^. nCompleted) <> "/" <> maybe "-" tShow (p ^. target) <> ")"
+taskPretty t = prefix <> taskDescPretty t
  where
-  prefix = if isJust (p ^. timeFinished) then "× " else "· "
+  prefix = if isJust (t ^. timeFinished) then "× " else "· "
 
 time :: NominalDiffTime -> NominalDiffTime -> (TimerEvent -> IO ()) -> IO ()
 time tickDuration duration notify = getCurrentTime >>= go
@@ -88,16 +91,14 @@ time tickDuration duration notify = getCurrentTime >>= go
     endTime = addUTCTime duration start
     loop tickN = do
       let tickTime = addUTCTime (fromIntegral tickN * tickDuration) start
-      let (expectedTime, event) =
+      let (expectedTime, timeLeft) =
             if tickTime < endTime
-              then (tickTime, TimeLeft $ endTime `diffUTCTime` tickTime)
-              else (endTime, Done)
+              then (tickTime, endTime `diffUTCTime` tickTime)
+              else (endTime, 0)
       sleepTime <- (expectedTime `diffUTCTime`) <$> getCurrentTime
       when (sleepTime > 0) $ threadDelay $ round (sleepTime * 1e6)
-      notify event
-      case event of
-        Done -> pure ()
-        _ -> loop (tickN + 1)
+      notify (TimeLeft timeLeft)
+      if timeLeft > 0 then loop (tickN + 1) else notify Done
 
 bord :: Color -> Text -> Widget n -> Widget n
 bord col bTitle w =

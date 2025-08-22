@@ -142,12 +142,15 @@ tasksW ts =
 
 optionalEditField :: (Ord n, Show n, Show a, Read a) => Lens' s (Maybe a) -> n -> s -> FormFieldState s e n
 optionalEditField lens name =
-  let validate ls =
+  let validateWrapper ls =
         let t = Text.strip (Text.intercalate "\n" ls)
          in if Text.null t
               then Just Nothing
-              else readMaybe (Text.unpack t) >>= Just
-   in editField lens name (Just 1) (const "") validate (txt . Text.unlines) id
+              else Just <$> readMaybe (Text.unpack t)
+      showV = \case
+        Nothing -> ""
+        Just a -> tShow a
+   in editField lens name (Just 1) showV validateWrapper (txt . Text.unlines) id
 
 mkTaskForm :: Task -> Bool -> Form TaskFormState PomoEvent PomoResource
 mkTaskForm t n =

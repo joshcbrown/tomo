@@ -1,5 +1,5 @@
 cabal-version:      3.0
-name:               hogodoro
+name:               tomo
 version:            0.1.0.0
 -- synopsis:
 -- description:
@@ -46,14 +46,14 @@ library
     ghc-options: -threaded
     default-language: GHC2024
 
-executable hogodoro
+executable tomo
     import:           warnings
     main-is:          Main.hs
     -- other-modules:
     -- other-extensions:
     build-depends:
         base ^>=4.20.0.0,
-        hogodoro,
+        tomo,
 
     hs-source-dirs:   app
     ghc-options: -threaded -rtsopts
