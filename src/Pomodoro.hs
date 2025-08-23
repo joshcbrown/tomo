@@ -88,8 +88,8 @@ toggleTimer chan =
   use timerThread
     >>= \case
       Playing tid -> do
-        (timeRemainingAtPause .=) =<< use remainingCycleDuration
         logWorked
+        (timeRemainingAtPause .=) =<< use remainingCycleDuration
         liftIO (killThread tid) *> (timerThread .= Paused)
       _ -> do
         startTimer chan
