@@ -164,6 +164,8 @@ app =
     , appStartEvent = do
         vty <- getVtyHandle
         liftIO $ Vty.setMode (Vty.outputIface vty) Vty.Mouse True
+        loadedTasks <- liftIO loadTasks
+        zoom ts $ handleTaskEvent (Load loadedTasks)
     , appAttrMap = const attrs
     , appChooseCursor = showFirstCursor
     }
@@ -171,14 +173,12 @@ app =
 initApp :: IO AppState
 initApp = do
   c <- newBChan 10
-  loadedTasks <- loadTasks
   initTaskForm <- newTaskForm
   initStats <- getStats
   let initTs =
         defaultTaskSession
           & (sendTask .~ \t -> writeBChan c (TimerEvent (SelectTask t)))
           & (saveTasks' .~ \xs -> writeBChan c (SaveTasks xs))
-          & (tasks .~ Seq.fromList loadedTasks)
       initSesh =
         defaultPomoSession
           & (complete .~ \t -> writeBChan c (CompleteTask t))

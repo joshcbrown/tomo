@@ -13,12 +13,14 @@ import Data.Sequence (Seq (..), (<|), (|>))
 import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
 import Data.Time.LocalTime (getZonedTime)
+import Debug.Trace (trace)
 import Graphics.Vty (Color, white)
 import Graphics.Vty.Attributes (yellow)
 import Lens.Micro (to, (.~), (^.), _Just)
 import Lens.Micro.Mtl (preview, use, (%=), (.=))
 import Lens.Micro.TH (makeLenses)
 import Lens.Micro.Type (Lens')
+import System.IO (hPutStrLn, stderr)
 import Text.Read (readMaybe)
 import Util hiding (saveTasks)
 
@@ -109,9 +111,10 @@ handleTaskEvent = \case
   Load ts -> do
     today <- zonedTimeToLocalDay <$> liftIO getZonedTime
 
-    let finishedDay = (preview $ timeFinished . _Just . to zonedTimeToLocalDay)
+    let finishedDay = preview $ timeFinished . _Just . to zonedTimeToLocalDay
     let filtered = filter (maybe True (== today) . finishedDay) ts
-    tasks .= Seq.fromList filtered
+    liftIO (hPutStrLn stderr ("ts : " <> show ts <> "filtered: " <> show filtered))
+    tasks .= (Seq.fromList filtered)
  where
   addSel :: Int -> EventM n TaskState ()
   addSel i = do
