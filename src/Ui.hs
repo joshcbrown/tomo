@@ -15,6 +15,7 @@ import Brick.Widgets.Center (centerLayer, hCenterLayer, vCenterLayer)
 import Brick.Widgets.Core (hLimit)
 import Brick.Widgets.Edit (editFocusedAttr)
 import Brick.Widgets.ProgressBar (progressCompleteAttr)
+import Control.Exception (finally)
 import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (for_, toList)
@@ -97,6 +98,10 @@ eventHandler ev = case ev of
       RefreshStats -> zoom stats $ handleStatsEvent Refresh
   MouseDown n _ _ _ -> case n of
     DayWidget day -> zoom stats $ handleStatsEvent (SelectDay day)
+    _ -> pure ()
+  (VtyEvent (EvKey k [MCtrl])) -> case k of
+    (KChar 'c') -> halt
+    (KChar 'd') -> halt
     _ -> pure ()
   (VtyEvent (EvKey k [])) -> do
     use focus >>= \case
@@ -217,12 +222,15 @@ initApp = do
 
 appMain :: IO ()
 appMain = do
+  s <- initApp
+  let buildVty = mkVty defaultConfig
+  initialVty <- buildVty
+  void $ customMain initialVty buildVty (Just $ s ^. chan) app s
+
+lockMain :: IO ()
+lockMain = do
   lockFileExists >>= \case
     True -> putStrLn =<< lockFileErrorMessage <$> lockFilePath
     False -> do
       createLockFile
-      s <- initApp
-      let buildVty = mkVty defaultConfig
-      initialVty <- buildVty
-      _ <- customMain initialVty buildVty (Just $ s ^. chan) app s
-      removeLockFile
+      finally removeLockFile appMain
