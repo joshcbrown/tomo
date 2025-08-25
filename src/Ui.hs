@@ -15,8 +15,9 @@ import Brick.Widgets.Center (centerLayer, hCenterLayer, vCenterLayer)
 import Brick.Widgets.Core (hLimit)
 import Brick.Widgets.Edit (editFocusedAttr)
 import Brick.Widgets.ProgressBar (progressCompleteAttr)
+import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
-import Data.Foldable (toList)
+import Data.Foldable (for_, toList)
 import Data.Maybe (catMaybes)
 import Data.Sequence qualified as Seq
 import Graphics.Vty as Vty
@@ -51,11 +52,12 @@ data AppState = AppState
   , _sesh :: PomoSession
   , _ts :: TaskState
   , _focus :: AppFocus
-  , _taskForm :: Form TaskFormState PomoEvent PomoResource
+  , _taskForm :: Form Task PomoEvent PomoResource
   , _stats :: StatsState
   , _showingTasks :: Bool
   , _showingStats :: Bool
   , _showingHelp :: Bool
+  , _submitTaskForm :: EventM PomoResource AppState ()
   }
 
 makeLenses ''AppState
@@ -64,6 +66,21 @@ unfocus :: EventM PomoResource AppState ()
 unfocus = do
   zoom ts $ handleTaskEvent Deselect
   focus .= Pomo
+
+addNewFormTask :: EventM PomoResource AppState ()
+addNewFormTask = do
+  t <- liftIO getZonedTime
+  task <- (timeCreated .~ t) . formState <$> use taskForm
+  zoom ts $ handleTaskEvent (Add task)
+  liftIO newTaskForm >>= (taskForm .=)
+
+replaceCurrentTaskWithFormAt :: Int -> EventM PomoResource AppState ()
+replaceCurrentTaskWithFormAt i = do
+  task <- formState <$> use taskForm
+  zoom ts $ handleTaskEvent (DeleteAt i)
+  zoom ts $ handleTaskEvent (InsertAt i task)
+  liftIO newTaskForm >>= (taskForm .=)
+  focus .= Tasks
 
 eventHandler :: BrickEvent PomoResource PomoEvent -> EventM PomoResource AppState ()
 eventHandler ev = case ev of
@@ -83,12 +100,8 @@ eventHandler ev = case ev of
       TaskForm -> case k of
         KEsc -> focus .= Pomo
         KEnter -> do
-          t <- liftIO getZonedTime
-          state <- formState <$> use taskForm
-          let updateTime = if state ^. new then timeCreated .~ t else id
-              pom = updateTime (state ^. res)
-          zoom ts $ handleTaskEvent (Add pom)
-          liftIO newTaskForm >>= (taskForm .=)
+          join (use submitTaskForm)
+          submitTaskForm .= addNewFormTask
         _ -> zoom taskForm $ handleFormEvent ev
       f -> case k of
         (KChar 'p') -> use chan >>= zoom sesh . toggleTimer
@@ -108,12 +121,14 @@ eventHandler ev = case ev of
             (KChar 'k') -> zoom ts $ handleTaskEvent SelUp
             (KChar 'c') -> zoom ts $ handleTaskEvent CompleteSelected
             (KChar 'e') -> do
-              cur <- zoom ts $ getSelected
-              -- FIXME: if user quits when editing, the task is lost
-              zoom ts $ handleTaskEvent DeleteSelected
-              zoom ts $ handleTaskEvent Deselect
-              focus .= TaskForm
-              maybe (pure ()) ((taskForm .=) . flip mkTaskForm False) cur
+              sel <- zoom ts $ getSelected
+              for_ sel $ \(curIdx, curTask) -> do
+                focus .= TaskForm
+                taskForm .= mkTaskForm curTask
+                submitTaskForm .= do
+                  replaceCurrentTaskWithFormAt curIdx
+                  zoom ts $ handleTaskEvent (SelectIndex curIdx)
+                zoom ts $ handleTaskEvent Deselect
             KEsc -> unfocus
             KEnter -> do
               old <- use (sesh . focusedTask)

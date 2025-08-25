@@ -35,6 +35,9 @@ data TaskControl
   | Append Task
   | Save
   | Load [Task]
+  | DeleteAt Int
+  | InsertAt Int Task
+  | SelectIndex Int
 
 data TaskState = TaskState
   { _tasks :: Seq Task
@@ -54,24 +57,20 @@ defaultTaskSession =
 
 makeLenses ''TaskState
 
-data TaskFormState = TaskFormState
-  { _res :: Task
-  , _new :: Bool
-  }
-
-makeLenses ''TaskFormState
-
 save :: EventM n TaskState ()
 save = do
   ts <- use tasks
   f <- use saveTasks'
   liftIO $ f (toList ts)
 
-getSelected :: EventM PomoResource TaskState (Maybe Task)
+getSelected :: EventM PomoResource TaskState (Maybe (Int, Task))
 getSelected = do
   mi <- use selectedTask
   ts <- use tasks
-  pure $ (`Seq.lookup` ts) =<< mi
+  pure . flip fmap mi $ \i -> (i, Seq.index ts i)
+
+getSelectedIndex :: EventM PomoResource TaskState (Maybe Int)
+getSelectedIndex = use selectedTask
 
 handleTaskEvent :: TaskControl -> EventM PomoResource TaskState ()
 handleTaskEvent = \case
@@ -79,8 +78,7 @@ handleTaskEvent = \case
   SelDown -> addSel 1
   Deselect -> selectedTask .= Nothing
   DeleteSelected -> do
-    use selectedTask >>= maybe (pure ()) ((tasks %=) . Seq.deleteAt)
-    save
+    use selectedTask >>= maybe (pure ()) (handleTaskEvent . DeleteAt)
   CompleteSelected ->
     use selectedTask >>= \case
       Nothing -> pure ()
@@ -110,11 +108,15 @@ handleTaskEvent = \case
   Save -> save
   Load ts -> do
     today <- zonedTimeToLocalDay <$> liftIO getZonedTime
-
     let finishedDay = preview $ timeFinished . _Just . to zonedTimeToLocalDay
     let filtered = filter (maybe True (== today) . finishedDay) ts
     liftIO (hPutStrLn stderr ("ts : " <> show ts <> "filtered: " <> show filtered))
     tasks .= (Seq.fromList filtered)
+  DeleteAt i -> (tasks %= Seq.deleteAt i) *> save
+  InsertAt i t -> (tasks %= Seq.insertAt i t) *> save
+  SelectIndex i -> do
+    l <- Seq.length <$> use tasks
+    when (i >= 0 && i < l) (selectedTask .= Just i)
  where
   addSel :: Int -> EventM n TaskState ()
   addSel i = do
@@ -155,17 +157,16 @@ optionalEditField lens name =
         Just a -> tShow a
    in editField lens name (Just 1) showV validateWrapper (txt . Text.unlines) id
 
-mkTaskForm :: Task -> Bool -> Form TaskFormState PomoEvent PomoResource
-mkTaskForm t n =
+mkTaskForm :: Task -> Form Task PomoEvent PomoResource
+mkTaskForm =
   let label s w =
         (vLimit 1 $ hLimit 15 $ str s <+> fill ' ') <+> w
    in newForm
-        [ label "Title:" @@= editTextField (res . title) TaskTitleField (Just 1)
-        , label "Target cycles:" @@= optionalEditField (res . target) TaskTargetField
+        [ label "Title:" @@= editTextField title TaskTitleField (Just 1)
+        , label "Target cycles:" @@= optionalEditField target TaskTargetField
         ]
-        (TaskFormState t n)
 
-newTaskForm :: IO (Form TaskFormState PomoEvent PomoResource)
+newTaskForm :: IO (Form Task PomoEvent PomoResource)
 newTaskForm = do
   t <- getZonedTime
-  pure $ mkTaskForm (Task "" 0 Nothing t Nothing) True
+  pure $ mkTaskForm (Task "" 0 Nothing t Nothing)
