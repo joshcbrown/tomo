@@ -57,12 +57,6 @@ defaultTaskSession =
 
 makeLenses ''TaskState
 
-save :: EventM n TaskState ()
-save = do
-  ts <- use tasks
-  f <- use saveTasks'
-  liftIO $ f (toList ts)
-
 getSelected :: EventM PomoResource TaskState (Maybe (Int, Task))
 getSelected = do
   mi <- use selectedTask
@@ -73,50 +67,52 @@ getSelectedIndex :: EventM PomoResource TaskState (Maybe Int)
 getSelectedIndex = use selectedTask
 
 handleTaskEvent :: TaskControl -> EventM PomoResource TaskState ()
-handleTaskEvent = \case
-  SelUp -> addSel (-1)
-  SelDown -> addSel 1
-  Deselect -> selectedTask .= Nothing
-  DeleteSelected -> do
-    use selectedTask >>= maybe (pure ()) (handleTaskEvent . DeleteAt)
-  CompleteSelected ->
-    use selectedTask >>= \case
-      Nothing -> pure ()
-      Just i -> do
-        t <- use tasks <&> (`Seq.index` i)
-        tasks %= Seq.deleteAt i
-        now <- liftIO getZonedTime
-        let newT = (timeFinished .~ Just now) t
-        tasks %= (|> newT)
-        save
-  Add p -> do
-    tasks %= (p <|)
-    save
-  Append p -> do
-    tasks %= (|> p)
-    save
-  SelectWithOld old -> do
-    f <- use sendTask
-    idx <- use selectedTask
-    case idx of
-      Just i -> do
-        t <- (`Seq.index` i) <$> use tasks
-        liftIO (f t)
-        tasks %= Seq.deleteAt i
-        maybe (pure ()) (\p -> tasks %= (p <|)) old
-      Nothing -> pure ()
-  Save -> save
-  Load ts -> do
-    today <- zonedTimeToLocalDay <$> liftIO getZonedTime
-    let finishedDay = preview $ timeFinished . _Just . to zonedTimeToLocalDay
-    let filtered = filter (maybe True (== today) . finishedDay) ts
-    liftIO (hPutStrLn stderr ("ts : " <> show ts <> "filtered: " <> show filtered))
-    tasks .= (Seq.fromList filtered)
-  DeleteAt i -> (tasks %= Seq.deleteAt i) *> save
-  InsertAt i t -> (tasks %= Seq.insertAt i t) *> save
-  SelectIndex i -> do
-    l <- Seq.length <$> use tasks
-    when (i >= 0 && i < l) (selectedTask .= Just i)
+handleTaskEvent c = do
+  case c of
+    SelUp -> addSel (-1)
+    SelDown -> addSel 1
+    Deselect -> selectedTask .= Nothing
+    DeleteSelected -> do
+      use selectedTask >>= maybe (pure ()) (handleTaskEvent . DeleteAt)
+    CompleteSelected ->
+      use selectedTask >>= \case
+        Nothing -> pure ()
+        Just i -> do
+          t <- use tasks <&> (`Seq.index` i)
+          tasks %= Seq.deleteAt i
+          now <- liftIO getZonedTime
+          let newT = (timeFinished .~ Just now) t
+          tasks %= (|> newT)
+    Add p -> do
+      tasks %= (p <|)
+    Append p -> do
+      tasks %= (|> p)
+    SelectWithOld old -> do
+      f <- use sendTask
+      idx <- use selectedTask
+      case idx of
+        Just i -> do
+          t <- (`Seq.index` i) <$> use tasks
+          liftIO (f t)
+          tasks %= Seq.deleteAt i
+          maybe (pure ()) (\p -> tasks %= (p <|)) old
+        Nothing -> pure ()
+    Save -> pure ()
+    Load ts -> do
+      today <- zonedTimeToLocalDay <$> liftIO getZonedTime
+      let finishedDay = preview $ timeFinished . _Just . to zonedTimeToLocalDay
+      let filtered = filter (maybe True (== today) . finishedDay) ts
+      liftIO (hPutStrLn stderr ("ts : " <> show ts <> "filtered: " <> show filtered))
+      tasks .= (Seq.fromList filtered)
+    DeleteAt i -> tasks %= Seq.deleteAt i
+    InsertAt i t -> tasks %= Seq.insertAt i t
+    SelectIndex i -> do
+      l <- Seq.length <$> use tasks
+      when (i >= 0 && i < l) (selectedTask .= Just i)
+  -- NOTE: not needed for many of these cases but it's a cheap operation and a nice fail safe to have
+  ts <- use tasks
+  f <- use saveTasks'
+  liftIO $ f (toList ts)
  where
   addSel :: Int -> EventM n TaskState ()
   addSel i = do

@@ -28,7 +28,7 @@ import Data.Time (Day, LocalTime (localDay), NominalDiffTime, ZonedTime (zonedTi
 import GHC.Generics (Generic)
 import GHC.IO.Exception (IOException (..))
 import Lens.Micro ((^.))
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, removeFile)
 import System.FilePath ((</>))
 
 data Task = Task
@@ -142,8 +142,11 @@ currentLogFile = logFile =<< (zonedTimeToLocalDay <$> getZonedTime)
 tasksFilePath :: IO FilePath
 tasksFilePath = appDir <&> (</> "tasks.json")
 
+lockFilePath :: IO FilePath
+lockFilePath = appDir <&> (</> "tomo.lockfile")
+
 -- TODO: exception handling (?)
-saveTasks :: [Task] -> IO (())
+saveTasks :: [Task] -> IO ()
 saveTasks tasks = tasksFilePath >>= flip encodeFile tasks
 
 nullIfThrow :: IO [a] -> IO [a]
@@ -170,6 +173,28 @@ dayLogs t = nullIfThrow $ do
 
 todayLogs :: IO [AppLog]
 todayLogs = dayLogs =<< (zonedTimeToLocalDay <$> getZonedTime)
+
+lockFileExists :: IO Bool
+lockFileExists = doesFileExist =<< lockFilePath
+
+createLockFile :: IO ()
+createLockFile = lockFilePath >>= flip writeFile ""
+
+removeLockFile :: IO ()
+removeLockFile =
+  lockFileExists >>= \case
+    False -> putStrLn "Warning: we tried to remove the lock file, but found it had already been deleted."
+    True -> removeFile =<< lockFilePath
+
+lockFileErrorMessage :: FilePath -> Text
+lockFileErrorMessage f =
+  Text.intercalate
+    "\n"
+    [ "Error: " <> Text.pack f <> " exists.\n"
+    , "tomo doesn't currently have any mechanisms for task data synchronisation,"
+    , "so allowing two instances to run at once would be problematic.\n"
+    , "If there isn't an instance running, feel free to delete the file and restart."
+    ]
 
 -- misc
 zonedTimeToLocalDay :: ZonedTime -> Day

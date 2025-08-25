@@ -18,8 +18,10 @@ import Brick.Widgets.ProgressBar (progressCompleteAttr)
 import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (for_, toList)
+import Data.Functor
 import Data.Maybe (catMaybes)
 import Data.Sequence qualified as Seq
+import Data.Text.IO (putStrLn)
 import Graphics.Vty as Vty
 import Graphics.Vty.CrossPlatform (mkVty)
 import Lens.Micro ((&), (.~), (^.))
@@ -29,6 +31,7 @@ import Pomodoro
 import Stats
 import Tasks
 import Util
+import Prelude hiding (putStrLn)
 
 attrs :: AttrMap
 attrs =
@@ -209,17 +212,17 @@ initApp = do
       , _stats = initStats
       , _showingStats = True
       , _showingHelp = False
+      , _submitTaskForm = addNewFormTask
       }
 
 appMain :: IO ()
 appMain = do
-  s <- initApp
-  let buildVty = mkVty defaultConfig
-  initialVty <- buildVty
-  pure ()
-    <* customMain
-      initialVty
-      buildVty
-      (Just $ s ^. chan)
-      app
-      s
+  lockFileExists >>= \case
+    True -> putStrLn =<< lockFileErrorMessage <$> lockFilePath
+    False -> do
+      createLockFile
+      s <- initApp
+      let buildVty = mkVty defaultConfig
+      initialVty <- buildVty
+      _ <- customMain initialVty buildVty (Just $ s ^. chan) app s
+      removeLockFile
