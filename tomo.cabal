@@ -12,11 +12,24 @@ build-type:         Simple
 extra-doc-files:    CHANGELOG.md
 -- extra-source-files:
 
-common warnings
-    ghc-options: -Wall
+common ghc-opts
+  ghc-options:
+      -Wall
+      -Wcompat
+      -Widentities
+      -Wincomplete-record-updates
+      -Wincomplete-uni-patterns
+      -Winvalid-haddock
+      -Wno-unticked-promoted-constructors
+      -Wno-unused-do-bind
+      -Wpartial-fields
+      -Wredundant-constraints
+      -Wunused-packages
+      -fhide-source-paths
+      -funbox-strict-fields
 
 library
-    import:           warnings
+    import:           ghc-opts
     exposed-modules:  Timer,
                       Ui,
                       Pomodoro,
@@ -47,7 +60,7 @@ library
     default-language: GHC2024
 
 executable tomo
-    import:           warnings
+    import:           ghc-opts
     main-is:          Main.hs
     -- other-modules:
     -- other-extensions:
