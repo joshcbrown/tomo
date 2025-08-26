@@ -35,6 +35,7 @@ data TaskControl
   | Append Task
   | Save
   | Load [Task]
+  | Refresh
   | DeleteAt Int
   | InsertAt Int Task
   | SelectIndex Int
@@ -65,6 +66,13 @@ getSelected = do
 
 getSelectedIndex :: EventM PomoResource TaskState (Maybe Int)
 getSelectedIndex = use selectedTask
+
+filterTasks :: EventM PomoResource TaskState ()
+filterTasks = do
+  today <- zonedTimeToLocalDay <$> liftIO getZonedTime
+  let finishedDay = preview $ timeFinished . _Just . to zonedTimeToLocalDay
+  let f = Seq.filter (maybe True (== today) . finishedDay)
+  tasks %= f
 
 handleTaskEvent :: TaskControl -> EventM PomoResource TaskState ()
 handleTaskEvent c = do
@@ -98,12 +106,8 @@ handleTaskEvent c = do
           maybe (pure ()) (\p -> tasks %= (p <|)) old
         Nothing -> pure ()
     Save -> pure ()
-    Load ts -> do
-      today <- zonedTimeToLocalDay <$> liftIO getZonedTime
-      let finishedDay = preview $ timeFinished . _Just . to zonedTimeToLocalDay
-      let filtered = filter (maybe True (== today) . finishedDay) ts
-      liftIO (hPutStrLn stderr ("ts : " <> show ts <> "filtered: " <> show filtered))
-      tasks .= (Seq.fromList filtered)
+    Load ts -> (tasks .= Seq.fromList ts) *> filterTasks
+    Refresh -> filterTasks
     DeleteAt i -> tasks %= Seq.deleteAt i
     InsertAt i t -> tasks %= Seq.insertAt i t
     SelectIndex i -> do

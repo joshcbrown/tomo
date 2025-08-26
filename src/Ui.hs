@@ -95,7 +95,7 @@ eventHandler ev = case ev of
         zoom sesh $ handlePomoEvent task
         use (ts . tasks) >>= saveTs . toList
       CompleteTask task -> zoom ts $ handleTaskEvent (Append task)
-      RefreshStats -> zoom stats $ handleStatsEvent Refresh
+      RefreshStats -> zoom stats $ handleStatsEvent Stats.Refresh
   MouseDown n _ _ _ -> case n of
     DayWidget day -> zoom stats $ handleStatsEvent (SelectDay day)
     _ -> pure ()
@@ -118,6 +118,10 @@ eventHandler ev = case ev of
         (KChar 't') -> showingTasks %= not
         (KChar 's') -> showingStats %= not
         (KChar '?') -> showingHelp %= not
+        (KChar 'r') -> do
+          zoom sesh $ logWorked
+          zoom stats $ handleStatsEvent Stats.Refresh
+          zoom ts $ handleTaskEvent Tasks.Refresh
         (KChar 'i') -> do
           unfocus
           focus .= TaskForm
