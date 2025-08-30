@@ -48,7 +48,7 @@ attrs =
       , (invalidFormInputAttr, black `on` red)
       , (focusedFormInputAttr, black `on` yellow)
       ]
-        ++ levelAttrMap
+        ++ levelAttrMapL
     )
 
 data AppState = AppState
@@ -81,8 +81,9 @@ addNewFormTask = do
 replaceCurrentTaskWithFormAt :: Int -> EventM PomoResource AppState ()
 replaceCurrentTaskWithFormAt i = do
   task <- formState <$> use taskForm
-  zoom ts $ handleTaskEvent (DeleteAt i)
-  zoom ts $ handleTaskEvent (InsertAt i task)
+  zoom ts $ do
+    handleTaskEvent (DeleteAt i)
+    handleTaskEvent (InsertAt i task)
   liftIO newTaskForm >>= (taskForm .=)
   focus .= Tasks
 
@@ -96,8 +97,9 @@ eventHandler ev = case ev of
         use (ts . tasks) >>= saveTs . toList
       CompleteTask task -> zoom ts $ handleTaskEvent (Append task)
       RefreshStats -> zoom stats $ handleStatsEvent Stats.Refresh
-  MouseDown n _ _ _ -> case n of
+  MouseDown n _ _ loc -> case n of
     DayWidget day -> zoom stats $ handleStatsEvent (SelectDay day)
+    StatsWidget -> zoom stats $ handleStatsEvent (ClickLoc loc)
     _ -> pure ()
   (VtyEvent (EvKey k [MCtrl])) -> case k of
     (KChar 'c') -> halt
@@ -112,8 +114,8 @@ eventHandler ev = case ev of
           submitTaskForm .= addNewFormTask
         _ -> zoom taskForm $ handleFormEvent ev
       f -> case k of
-        (KChar 'p') -> use chan >>= zoom sesh . toggleTimer
         (KChar 'q') -> halt
+        (KChar 'p') -> use chan >>= zoom sesh . toggleTimer
         (KChar 'n') -> use chan >>= zoom sesh . skip
         (KChar 't') -> showingTasks %= not
         (KChar 's') -> showingStats %= not
@@ -210,9 +212,8 @@ initApp = do
         defaultPomoSession
           & (complete .~ \t -> writeBChan c (CompleteTask t))
           & ( Pomodoro.logActivity .~ \a -> do
-                liftIO (Util.logActivity a)
-                invalidateCacheEntry StatsWidget
-                liftIO (writeBChan c RefreshStats)
+                Util.logActivity a
+                writeBChan c RefreshStats
             )
   pure
     AppState

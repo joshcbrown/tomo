@@ -2,13 +2,15 @@
 
 module Stats where
 
-import Brick (EventM, Widget, bg, cached, clickable, hBox, txt)
+import Brick (AttrMap, EventM, Location (..), Widget, attrMap, attrMapLookup, bg, cached, clickable, hBox, txt)
 import Brick.AttrMap (AttrName, attrName)
 import Brick.Types (put)
 import Brick.Util (fg)
-import Brick.Widgets.Core (vBox, withAttr, (<=>))
+import Brick.Widgets.Core (raw, vBox, withAttr, (<=>))
 import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
+import Data.Foldable (traverse_)
+import Data.List ((!?))
 import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Monoid (Sum (..))
@@ -17,10 +19,11 @@ import Data.Time (Day, NominalDiffTime, ZonedTime (zonedTimeToLocalTime), addLoc
 import Data.Time.Calendar (DayOfWeek (Sunday))
 import Data.Time.LocalTime (getZonedTime, localDay)
 import GHC.Generics (Generic)
-import Graphics.Vty (Attr, Color (..))
+import Graphics.Vty (Attr, Color (..), Image, defAttr, horizCat, vertCat)
 import Graphics.Vty.Attributes (brightWhite, color240, yellow)
+import Graphics.Vty.Image (text)
 import Lens.Micro (Traversal', foldMapOf, (^.))
-import Lens.Micro.Mtl ((.=))
+import Lens.Micro.Mtl (use, (.=))
 import Lens.Micro.TH (makeLenses)
 import Lens.Micro.Type (Getting)
 import Util
@@ -35,13 +38,13 @@ data StatsState = StatsState {_days :: Map Day DayStats, _selectedDay :: Day, _w
 
 makeLenses ''StatsState
 
-data StateEvent = Refresh | SelectDay Day
+data StateEvent = Refresh | SelectDay Day | ClickLoc Location
 
 _LWorkedTime :: Traversal' Activity NominalDiffTime
 _LWorkedTime f (LWorked desc t) = LWorked desc <$> f t
 _LWorkedTime _ completed = pure completed
 
-sumOf :: (Num a) => Getting (Sum a) s a -> s -> a
+sumOf :: Getting (Sum a) s a -> s -> a
 sumOf l = getSum . foldMapOf l Sum
 
 workedTime :: [Activity] -> NominalDiffTime
@@ -75,6 +78,10 @@ handleStatsEvent :: StateEvent -> EventM PomoResource StatsState ()
 handleStatsEvent = \case
   Refresh -> put =<< liftIO getStats
   SelectDay d -> selectedDay .= d
+  ClickLoc (Location (x, y)) -> do
+    ws <- use weeks
+    let day = ws !? x >>= (!? y)
+    traverse_ (selectedDay .=) day
 
 statPretty :: Day -> DayStats -> Text
 statPretty day s =
@@ -83,23 +90,24 @@ statPretty day s =
 
 statsW :: StatsState -> Widget PomoResource
 statsW s =
-  cached StatsWidget $
-    bord brightWhite "Stats" $
-      (hBox $ map vBox $ daysTransformed)
-        <=> selectSummary
+  bord brightWhite "Stats"
+    $ clickable
+      StatsWidget
+    $ (raw $ horizCat $ map vertCat $ daysTransformed)
+      <=> selectSummary
  where
   maxDay :: NominalDiffTime
   maxDay = maximum $ (^. workTime) <$> (s ^. days)
 
   -- TODO: surely there is a lens-y way to do this
-  daysTransformed :: [[Widget PomoResource]]
+  daysTransformed :: [[Image]]
   daysTransformed = flip (map . map) (s ^. weeks) $
     \day -> case Map.lookup day (s ^. days) of
-      Nothing -> txt "x"
+      Nothing -> text defAttr "x"
       Just stat ->
         let getAttr = if (day == s ^. selectedDay) then contribAttrHighlight else contribAttr
-            attr = getAttr . valueToLevel $ (stat ^. workTime) / maxDay
-         in clickable (DayWidget day) $ withAttr attr (txt "■")
+            attrN = getAttr . valueToLevel $ (stat ^. workTime) / maxDay
+         in text (attrMapLookup attrN levelAttrMap) "■"
 
   selectSummary :: Widget PomoResource
   selectSummary =
@@ -135,9 +143,12 @@ contribAttr level = attrName $ "contribution-" ++ show level
 contribAttrHighlight :: Level -> AttrName
 contribAttrHighlight level = attrName ("contribution-" ++ show level) <> attrName ("-highlight")
 
-levelAttrMap :: [(AttrName, Attr)]
-levelAttrMap =
+levelAttrMapL :: [(AttrName, Attr)]
+levelAttrMapL =
   join
     [ [(contribAttr level, fg (levelToColor level)), (contribAttrHighlight level, bg yellow)]
     | level <- [L0, L1, L2, L3, L4]
     ]
+
+levelAttrMap :: AttrMap
+levelAttrMap = attrMap defAttr levelAttrMapL

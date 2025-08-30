@@ -36,7 +36,7 @@ data PomoSession = PomoSession
   , _cycle :: Int
   , _timerThread :: TimerData
   , _complete :: Task -> IO ()
-  , _logActivity :: Activity -> EventM PomoResource PomoSession ()
+  , _logActivity :: Activity -> IO ()
   }
 
 makeLenses ''PomoSession
@@ -71,7 +71,7 @@ getTitle :: EventM n PomoSession (Maybe Text)
 getTitle = preuse (focusedTask . _Just . title)
 
 logActivity' :: Activity -> EventM PomoResource PomoSession ()
-logActivity' a = use logActivity >>= \f -> f a
+logActivity' a = use logActivity >>= liftIO . ($ a)
 
 logWorked :: EventM PomoResource PomoSession ()
 logWorked = do
