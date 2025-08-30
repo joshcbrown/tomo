@@ -10,7 +10,7 @@ import Brick.Types (
 import Brick.Widgets.Core (vBox)
 import Brick.Widgets.ProgressBar (progressBar)
 import Control.Concurrent (ThreadId, forkIO, killThread)
-import Control.Monad (when)
+import Control.Monad (join, when)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Data.Text (Text)
 import Data.Time
@@ -36,7 +36,7 @@ data PomoSession = PomoSession
   , _cycle :: Int
   , _timerThread :: TimerData
   , _complete :: Task -> IO ()
-  , _logActivity :: Activity -> IO ()
+  , _logActivity :: Activity -> EventM PomoResource PomoSession ()
   }
 
 makeLenses ''PomoSession
@@ -71,7 +71,7 @@ getTitle :: EventM n PomoSession (Maybe Text)
 getTitle = preuse (focusedTask . _Just . title)
 
 logActivity' :: Activity -> EventM PomoResource PomoSession ()
-logActivity' a = use logActivity >>= \f -> liftIO (f a)
+logActivity' a = use logActivity >>= \f -> f a
 
 logWorked :: EventM PomoResource PomoSession ()
 logWorked = do
@@ -98,7 +98,7 @@ startTimer :: BChan PomoEvent -> EventM PomoResource PomoSession ()
 startTimer chan =
   use remainingCycleDuration >>= start
  where
-  tick = secondsToNominalDiffTime 0.1
+  tick = secondsToNominalDiffTime 0.25
   start l =
     liftIO (forkIO (time tick l (writeBChan chan . TimerEvent))) >>= (timerThread .=) . Playing
 

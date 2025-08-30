@@ -2,7 +2,7 @@
 
 module Stats where
 
-import Brick (EventM, Widget, bg, clickable, hBox, txt)
+import Brick (EventM, Widget, bg, cached, clickable, hBox, txt)
 import Brick.AttrMap (AttrName, attrName)
 import Brick.Types (put)
 import Brick.Util (fg)
@@ -83,9 +83,10 @@ statPretty day s =
 
 statsW :: StatsState -> Widget PomoResource
 statsW s =
-  bord brightWhite "Stats" $
-    (hBox $ map vBox $ daysTransformed)
-      <=> selectSummary
+  cached StatsWidget $
+    bord brightWhite "Stats" $
+      (hBox $ map vBox $ daysTransformed)
+        <=> selectSummary
  where
   maxDay :: NominalDiffTime
   maxDay = maximum $ (^. workTime) <$> (s ^. days)

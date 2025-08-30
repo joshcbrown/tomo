@@ -209,7 +209,11 @@ initApp = do
       initSesh =
         defaultPomoSession
           & (complete .~ \t -> writeBChan c (CompleteTask t))
-          & (Pomodoro.logActivity .~ \a -> liftIO (Util.logActivity a) *> writeBChan c RefreshStats)
+          & ( Pomodoro.logActivity .~ \a -> do
+                liftIO (Util.logActivity a)
+                invalidateCacheEntry StatsWidget
+                liftIO (writeBChan c RefreshStats)
+            )
   pure
     AppState
       { _chan = c
