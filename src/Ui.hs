@@ -15,7 +15,7 @@ import Brick.Widgets.Center (centerLayer, hCenterLayer, vCenterLayer)
 import Brick.Widgets.Core (hLimit)
 import Brick.Widgets.Edit (editFocusedAttr)
 import Brick.Widgets.ProgressBar (progressCompleteAttr)
-import Control.Exception (finally)
+import Control.Exception (finally, try)
 import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (for_, toList)
@@ -23,6 +23,7 @@ import Data.Functor
 import Data.Maybe (catMaybes)
 import Data.Sequence qualified as Seq
 import Data.Text.IO (putStrLn)
+import GHC.IO.Exception (IOException (IOError))
 import Graphics.Vty as Vty
 import Graphics.Vty.CrossPlatform (mkVty)
 import Lens.Micro ((&), (.~), (^.))
@@ -242,4 +243,5 @@ lockMain = do
     True -> putStrLn =<< lockFileErrorMessage <$> lockFilePath
     False -> do
       createLockFile
-      finally removeLockFile appMain
+      try @IOError $ appMain
+      removeLockFile
