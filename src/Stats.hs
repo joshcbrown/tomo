@@ -90,10 +90,10 @@ statPretty day s =
 
 statsW :: StatsState -> Widget PomoResource
 statsW s =
-  bord brightWhite "Stats"
-    $ clickable
+  bord brightWhite "Stats" $
+    clickable
       StatsWidget
-    $ (raw $ horizCat $ map vertCat $ daysTransformed)
+      (raw $ horizCat $ map vertCat $ daysTransformed)
       <=> selectSummary
  where
   maxDay :: NominalDiffTime
